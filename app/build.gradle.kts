@@ -8,12 +8,17 @@ android {
     namespace = "com.pulsemessenger.android"
     compileSdk = 34
 
+    val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+    val keystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+    val keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+    val keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+
     defaultConfig {
         applicationId = "com.pulsemessenger.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -25,10 +30,26 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (!keystorePath.isNullOrBlank() && !keystorePassword.isNullOrBlank() && !keyAlias.isNullOrBlank() && !keyPassword.isNullOrBlank()) {
+                signingConfig = signingConfigs.create("release") {
+                    storeFile = file(keystorePath)
+                    storePassword = keystorePassword
+                    this.keyAlias = keyAlias
+                    this.keyPassword = keyPassword
+                }
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+    }
+
+    applicationVariants.all {
+        outputs.all {
+            val output =
+                this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            output.outputFileName = "zhuravlik-release.apk"
         }
     }
 
