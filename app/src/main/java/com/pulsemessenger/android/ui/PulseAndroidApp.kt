@@ -227,6 +227,27 @@ fun PulseAndroidApp() {
     var updateDownloadProgress by remember { mutableStateOf<Float?>(null) }
     var downloadedUpdatePath by remember { mutableStateOf<String?>(null) }
     var isDownloadingUpdate by remember { mutableStateOf(false) }
+    fun downloadUpdate(update: AppUpdateInfo) {
+        if (isDownloadingUpdate) return
+
+        scope.launch {
+            isDownloadingUpdate = true
+            updateDownloadProgress = null
+
+            val file = runCatching {
+                updateManager.downloadApk(update) { progress ->
+                    updateDownloadProgress = progress
+                }
+            }.onFailure { error ->
+                Log.e("APP_UPDATE", "download failed", error)
+            }.getOrNull()
+
+            downloadedUpdatePath = file?.absolutePath
+            isDownloadingUpdate = false
+
+            Log.d("APP_UPDATE", "downloadedPath=$downloadedUpdatePath")
+        }
+    }
 
     fun buildDmForwardPayloads(ids: Set<Long>): List<ForwardPayload> {
         val currentPeer = selectedDialog ?: return emptyList()
@@ -378,22 +399,28 @@ fun PulseAndroidApp() {
         }
     }
 
-    LaunchedEffect(authViewModel.isAuthorized) {
-        if (!authViewModel.isAuthorized) return@LaunchedEffect
+    LaunchedEffect(Unit) {
+        while (true) {
+            Log.d("APP_UPDATE", "checking local=${BuildConfig.VERSION_NAME}")
 
-        while (authViewModel.isAuthorized) {
-            val update = runCatching { updateManager.checkForUpdate(BuildConfig.VERSION_NAME) }.getOrNull()
+            val update = runCatching {
+                updateManager.checkForUpdate(BuildConfig.VERSION_NAME)
+            }.onFailure { error ->
+                Log.e("APP_UPDATE", "check failed", error)
+            }.getOrNull()
+
             availableUpdate = update
 
-            if (update != null && downloadedUpdatePath == null && !isDownloadingUpdate) {
-                isDownloadingUpdate = true
+            if (update != null) {
+                Log.d("APP_UPDATE", "update found remote=${update.version} url=${update.apkUrl}")
+
+                if (downloadedUpdatePath == null && !isDownloadingUpdate) {
+                    downloadUpdate(update)
+                }
+            } else {
+                Log.d("APP_UPDATE", "no update")
+                downloadedUpdatePath = null
                 updateDownloadProgress = null
-                val file = runCatching {
-                    updateManager.downloadApk(update) { progress ->
-                        updateDownloadProgress = progress
-                    }
-                }.getOrNull()
-                downloadedUpdatePath = file?.absolutePath
                 isDownloadingUpdate = false
             }
 
@@ -908,17 +935,21 @@ fun PulseAndroidApp() {
                         downloaded = downloadedUpdatePath != null,
                         onAction = {
                             val apkPath = downloadedUpdatePath
-                            if (apkPath != null) {
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
-                                    context.startActivity(
-                                        Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
-                                            data = android.net.Uri.parse("package:${context.packageName}")
-                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                        }
-                                    )
-                                } else {
-                                    context.startActivity(updateManager.createInstallIntent(File(apkPath)))
-                                }
+
+                            if (apkPath == null) {
+                                downloadUpdate(update)
+                                return@UpdateBanner
+                            }
+
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                                        data = android.net.Uri.parse("package:${context.packageName}")
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                )
+                            } else {
+                                context.startActivity(updateManager.createInstallIntent(File(apkPath)))
                             }
                         }
                     )
@@ -1050,7 +1081,7 @@ private fun UpdateBanner(
                     CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                 } else {
                     FilledIconButton(onClick = onAction) {
-                        Text(if (downloaded) "OK" else "APK")
+                        Text(if (downloaded) "OK" else "↓")
                     }
                 }
             }

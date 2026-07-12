@@ -3,13 +3,16 @@ package com.pulsemessenger.android.core.update
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import androidx.core.content.FileProvider
 import com.google.gson.Gson
 import com.pulsemessenger.android.BuildConfig
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
-
+import java.util.concurrent.TimeUnit
 data class BackendUpdateResponse(
     val enabled: Boolean = false,
     val version: String = "",
@@ -29,33 +32,62 @@ data class AppUpdateInfo(
 class AppUpdateManager(
     private val context: Context,
 ) {
-    private val client = OkHttpClient()
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.MINUTES)
+        .writeTimeout(5, TimeUnit.MINUTES)
+        .callTimeout(10, TimeUnit.MINUTES)
+        .build()
     private val gson = Gson()
 
-    suspend fun checkForUpdate(currentVersion: String): AppUpdateInfo? {
+    suspend fun checkForUpdate(currentVersion: String): AppUpdateInfo? = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url(BuildConfig.BASE_URL.trimEnd('/') + "/api/app-update/android")
             .build()
 
         val response = client.newCall(request).execute()
+
         response.use {
-            if (!it.isSuccessful) return null
             val body = it.body?.string().orEmpty()
-            val payload = gson.fromJson(body, BackendUpdateResponse::class.java) ?: return null
-            if (!payload.enabled) return null
+
+            Log.d(
+                "APP_UPDATE",
+                "status=${it.code} currentVersion=$currentVersion body=$body"
+            )
+
+            if (!it.isSuccessful) return@withContext null
+
+            val payload = gson.fromJson(body, BackendUpdateResponse::class.java)
+                ?: return@withContext null
+
+            Log.d(
+                "APP_UPDATE",
+                "enabled=${payload.enabled} remote=${payload.version} local=$currentVersion downloadUrl=${payload.downloadUrl}"
+            )
+
+            if (!payload.enabled) return@withContext null
 
             val remoteVersion = normalizeVersion(payload.version)
             val localVersion = normalizeVersion(currentVersion)
-            if (remoteVersion.isBlank() || remoteVersion == localVersion) return null
 
-            val downloadUrl = payload.downloadUrl.takeIf { url -> url.isNotBlank() } ?: return null
-            val absoluteUrl = if (downloadUrl.startsWith("http://") || downloadUrl.startsWith("https://")) {
+            if (remoteVersion.isBlank() || remoteVersion == localVersion) {
+                return@withContext null
+            }
+
+            val downloadUrl = payload.downloadUrl
+                .takeIf { url -> url.isNotBlank() }
+                ?: return@withContext null
+
+            val absoluteUrl = if (
+                downloadUrl.startsWith("http://") ||
+                downloadUrl.startsWith("https://")
+            ) {
                 downloadUrl
             } else {
                 BuildConfig.BASE_URL.trimEnd('/') + "/" + downloadUrl.trimStart('/')
             }
 
-            return AppUpdateInfo(
+            AppUpdateInfo(
                 version = remoteVersion,
                 notes = payload.notes,
                 apkUrl = absoluteUrl,
@@ -64,33 +96,66 @@ class AppUpdateManager(
         }
     }
 
-    suspend fun downloadApk(info: AppUpdateInfo, onProgress: (Float?) -> Unit): File? {
-        val request = Request.Builder().url(info.apkUrl).build()
-        val response = client.newCall(request).execute()
-        response.use {
-            if (!it.isSuccessful) return null
-            val body = it.body ?: return null
+    suspend fun downloadApk(
+        info: AppUpdateInfo,
+        onProgress: (Float?) -> Unit
+    ): File? = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url(info.apkUrl)
+            .build()
 
-            val dir = File(context.cacheDir, "updates").apply { mkdirs() }
-            val file = File(dir, info.fileName)
+        val response = client.newCall(request).execute()
+
+        response.use {
+            Log.d("APP_UPDATE", "download status=${it.code} url=${info.apkUrl}")
+
+            if (!it.isSuccessful) return@withContext null
+
+            val body = it.body ?: return@withContext null
+
+            val dir = File(context.cacheDir, "updates").apply {
+                mkdirs()
+            }
+
+            val safeFileName = info.fileName
+                .ifBlank { "zhuravlik-${info.version}.apk" }
+                .replace(Regex("[^a-zA-Z0-9._-]"), "_")
+
+            val file = File(dir, safeFileName)
             val total = body.contentLength().takeIf { len -> len > 0L }
 
             body.byteStream().use { input ->
                 file.outputStream().use { output ->
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                     var downloaded = 0L
+
                     while (true) {
                         val read = input.read(buffer)
                         if (read == -1) break
+
                         output.write(buffer, 0, read)
                         downloaded += read
-                        onProgress(total?.let { downloaded.toFloat() / it.toFloat() })
+
+                        val progress = total?.let { totalBytes ->
+                            downloaded.toFloat() / totalBytes.toFloat()
+                        }
+
+                        withContext(Dispatchers.Main) {
+                            onProgress(progress)
+                        }
                     }
+
                     output.flush()
                 }
             }
 
-            return file
+            withContext(Dispatchers.Main) {
+                onProgress(1f)
+            }
+
+            Log.d("APP_UPDATE", "apk saved=${file.absolutePath} size=${file.length()}")
+
+            file
         }
     }
 
