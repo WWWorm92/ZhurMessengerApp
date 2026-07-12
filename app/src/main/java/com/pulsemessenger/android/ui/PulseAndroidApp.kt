@@ -227,12 +227,15 @@ fun PulseAndroidApp() {
     var updateDownloadProgress by remember { mutableStateOf<Float?>(null) }
     var downloadedUpdatePath by remember { mutableStateOf<String?>(null) }
     var isDownloadingUpdate by remember { mutableStateOf(false) }
+    var updateError by remember { mutableStateOf<String?>(null) }
+
     fun downloadUpdate(update: AppUpdateInfo) {
         if (isDownloadingUpdate) return
 
         scope.launch {
             isDownloadingUpdate = true
             updateDownloadProgress = null
+            updateError = null
 
             val file = runCatching {
                 updateManager.downloadApk(update) { progress ->
@@ -244,6 +247,10 @@ fun PulseAndroidApp() {
 
             downloadedUpdatePath = file?.absolutePath
             isDownloadingUpdate = false
+
+            if (file == null) {
+                updateError = "Не удалось скачать APK. Нажмите, чтобы повторить."
+            }
 
             Log.d("APP_UPDATE", "downloadedPath=$downloadedUpdatePath")
         }
@@ -403,24 +410,31 @@ fun PulseAndroidApp() {
         while (true) {
             Log.d("APP_UPDATE", "checking local=${BuildConfig.VERSION_NAME}")
 
+            val previousUpdateVersion = availableUpdate?.version
+
             val update = runCatching {
                 updateManager.checkForUpdate(BuildConfig.VERSION_NAME)
             }.onFailure { error ->
                 Log.e("APP_UPDATE", "check failed", error)
             }.getOrNull()
 
-            availableUpdate = update
-
             if (update != null) {
                 Log.d("APP_UPDATE", "update found remote=${update.version} url=${update.apkUrl}")
 
-                if (downloadedUpdatePath == null && !isDownloadingUpdate) {
-                    downloadUpdate(update)
+                if (previousUpdateVersion != update.version) {
+                    downloadedUpdatePath = null
+                    updateDownloadProgress = null
+                    updateError = null
+                    isDownloadingUpdate = false
                 }
+
+                availableUpdate = update
             } else {
                 Log.d("APP_UPDATE", "no update")
+                availableUpdate = null
                 downloadedUpdatePath = null
                 updateDownloadProgress = null
+                updateError = null
                 isDownloadingUpdate = false
             }
 
@@ -933,6 +947,7 @@ fun PulseAndroidApp() {
                         isDownloading = isDownloadingUpdate,
                         progress = updateDownloadProgress,
                         downloaded = downloadedUpdatePath != null,
+                        error = updateError,
                         onAction = {
                             val apkPath = downloadedUpdatePath
 
@@ -1046,6 +1061,7 @@ private fun UpdateBanner(
     isDownloading: Boolean,
     progress: Float?,
     downloaded: Boolean,
+    error: String?,
     onAction: () -> Unit,
 ) {
     Box(
@@ -1066,22 +1082,41 @@ private fun UpdateBanner(
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Доступна версия $version", fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
                     Text(
-                        when {
-                            downloaded -> "APK уже скачан, можно установить"
-                            isDownloading -> "Загрузка обновления ${progress?.let { "${(it * 100).toInt()}%" } ?: "..."}"
-                            else -> "Готово к установке"
+                        text = "Доступна версия $version",
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                    )
+
+                    Text(
+                        text = when {
+                            isDownloading -> "Загрузка ${progress?.let { "${(it * 100).toInt()}%" } ?: "..."}"
+                            downloaded -> "APK скачан, можно установить"
+                            !error.isNullOrBlank() -> error
+                            else -> "Нажмите, чтобы скачать обновление"
                         },
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (!error.isNullOrBlank()) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                     )
                 }
+
                 if (isDownloading) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp
+                    )
                 } else {
                     FilledIconButton(onClick = onAction) {
-                        Text(if (downloaded) "OK" else "↓")
+                        Text(
+                            text = when {
+                                downloaded -> "OK"
+                                !error.isNullOrBlank() -> "↻"
+                                else -> "↓"
+                            }
+                        )
                     }
                 }
             }

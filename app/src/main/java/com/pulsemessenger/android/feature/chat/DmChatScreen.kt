@@ -110,6 +110,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DmChatScreen(
     peer: DialogUserDto,
@@ -483,6 +489,8 @@ fun DmChatScreen(
         }
 
         if (viewModel.pendingAttachments.isNotEmpty()) {
+
+
             PendingAttachmentsPreview(
                 attachments = viewModel.pendingAttachments,
                 isUploading = viewModel.isUploadingImage,
@@ -505,36 +513,11 @@ fun DmChatScreen(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box {
-                IconButton(
-                    onClick = { attachMenuExpanded = true },
-                    enabled = !viewModel.isUploadingImage && viewModel.editingMessageId == null,
-                ) {
-                    Icon(Icons.Default.AttachFile, contentDescription = "Прикрепить")
-                }
-                DropdownMenu(expanded = attachMenuExpanded, onDismissRequest = { attachMenuExpanded = false }) {
-                    DropdownMenuItem(
-                        text = { Text("Фото") },
-                        onClick = {
-                            attachMenuExpanded = false
-                            imagePicker.launch("image/*")
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Файл") },
-                        onClick = {
-                            attachMenuExpanded = false
-                            filePicker.launch("*/*")
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Опрос") },
-                        onClick = {
-                            attachMenuExpanded = false
-                            showPollDialog = true
-                        }
-                    )
-                }
+            IconButton(
+                onClick = { attachMenuExpanded = true },
+                enabled = !viewModel.isUploadingImage && viewModel.editingMessageId == null,
+            ) {
+                Icon(Icons.Default.AttachFile, contentDescription = "Прикрепить")
             }
             OutlinedTextField(
                 value = viewModel.draft,
@@ -616,6 +599,27 @@ fun DmChatScreen(
             )
         }
 
+        if (attachMenuExpanded) {
+            ModalBottomSheet(
+                onDismissRequest = { attachMenuExpanded = false }
+            ) {
+                AttachmentPickerSheetContent(
+                    onImageClick = {
+                        attachMenuExpanded = false
+                        imagePicker.launch("image/*")
+                    },
+                    onFileClick = {
+                        attachMenuExpanded = false
+                        filePicker.launch("*/*")
+                    },
+                    onPollClick = {
+                        attachMenuExpanded = false
+                        showPollDialog = true
+                    }
+                )
+            }
+        }
+
         if (showProfileSheet) {
             DmProfileSheet(
                 peer = peer,
@@ -641,6 +645,94 @@ fun DmChatScreen(
     }
 }
 
+@Composable
+private fun AttachmentPickerSheetContent(
+    onImageClick: () -> Unit,
+    onFileClick: () -> Unit,
+    onPollClick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 18.dp, end = 18.dp, bottom = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text(
+            text = "Прикрепить",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+
+        AttachmentOption(
+            icon = "🖼️",
+            title = "Фото",
+            subtitle = "Выбрать одно или несколько фото",
+            onClick = onImageClick
+        )
+
+        AttachmentOption(
+            icon = "📎",
+            title = "Файл",
+            subtitle = "Документ, архив, видео или другой файл",
+            onClick = onFileClick
+        )
+
+        AttachmentOption(
+            icon = "📊",
+            title = "Опрос",
+            subtitle = "Создать опрос в чате",
+            onClick = onPollClick
+        )
+    }
+}
+
+@Composable
+private fun AttachmentOption(
+    icon: String,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(icon, fontSize = 22.sp)
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
 @Composable
 private fun PendingAttachmentsPreview(
     attachments: List<PendingAttachment>,
@@ -770,7 +862,40 @@ private fun DmMessageBubble(
     var menuExpanded by remember(message.id) { mutableStateOf(false) }
     var confirmDelete by remember(message.id) { mutableStateOf(false) }
     val resolvedFileUrl = if (message.fileUrl.isNotBlank()) resolveBackendMediaUrl(message.fileUrl) else ""
-    val bubbleModifier = Modifier.widthIn(max = 292.dp)
+    var replySwipeOffset by remember(message.id) { mutableStateOf(0f) }
+    val maxReplySwipe = with(LocalDensity.current) { 56.dp.toPx() }
+    val replyTrigger = with(LocalDensity.current) { 34.dp.toPx() }
+
+    val bubbleModifier = Modifier
+        .widthIn(max = 292.dp)
+        .offset {
+            IntOffset(
+                x = replySwipeOffset.roundToInt(),
+                y = 0
+            )
+        }
+        .pointerInput(message.id, selectionMode) {
+            if (!selectionMode && message.deletedAt == null) {
+                detectHorizontalDragGestures(
+                    onHorizontalDrag = { change, dragAmount ->
+                        if (dragAmount > 0f) {
+                            replySwipeOffset = (replySwipeOffset + dragAmount)
+                                .coerceIn(0f, maxReplySwipe)
+                            change.consume()
+                        }
+                    },
+                    onDragEnd = {
+                        if (replySwipeOffset >= replyTrigger) {
+                            onReply()
+                        }
+                        replySwipeOffset = 0f
+                    },
+                    onDragCancel = {
+                        replySwipeOffset = 0f
+                    }
+                )
+            }
+        }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -784,6 +909,22 @@ private fun DmMessageBubble(
             )
         }
         Box {
+            if (replySwipeOffset > 4f && message.deletedAt == null && !selectionMode) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "↩",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
             Column(horizontalAlignment = if (isMine) Alignment.End else Alignment.Start) {
                 Card(
                     modifier = if (message.deletedAt == null && !selectionMode) {

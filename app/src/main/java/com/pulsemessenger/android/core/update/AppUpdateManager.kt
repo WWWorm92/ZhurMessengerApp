@@ -13,6 +13,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.util.concurrent.TimeUnit
+
 data class BackendUpdateResponse(
     val enabled: Boolean = false,
     val version: String = "",
@@ -96,68 +97,94 @@ class AppUpdateManager(
         }
     }
 
-    suspend fun downloadApk(
-        info: AppUpdateInfo,
-        onProgress: (Float?) -> Unit
-    ): File? = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
-            .url(info.apkUrl)
-            .build()
+    suspend fun downloadApk(info: AppUpdateInfo, onProgress: (Float?) -> Unit): File? =
+        withContext(Dispatchers.IO) {
+            var lastError: Throwable? = null
 
-        val response = client.newCall(request).execute()
+            repeat(3) { attempt ->
+                try {
+                    Log.d("APP_UPDATE", "download attempt=${attempt + 1} url=${info.apkUrl}")
 
-        response.use {
-            Log.d("APP_UPDATE", "download status=${it.code} url=${info.apkUrl}")
+                    val request = Request.Builder()
+                        .url(info.apkUrl)
+                        .build()
 
-            if (!it.isSuccessful) return@withContext null
+                    val response = client.newCall(request).execute()
 
-            val body = it.body ?: return@withContext null
+                    response.use {
+                        Log.d("APP_UPDATE", "download status=${it.code}")
 
-            val dir = File(context.cacheDir, "updates").apply {
-                mkdirs()
-            }
-
-            val safeFileName = info.fileName
-                .ifBlank { "zhuravlik-${info.version}.apk" }
-                .replace(Regex("[^a-zA-Z0-9._-]"), "_")
-
-            val file = File(dir, safeFileName)
-            val total = body.contentLength().takeIf { len -> len > 0L }
-
-            body.byteStream().use { input ->
-                file.outputStream().use { output ->
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    var downloaded = 0L
-
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read == -1) break
-
-                        output.write(buffer, 0, read)
-                        downloaded += read
-
-                        val progress = total?.let { totalBytes ->
-                            downloaded.toFloat() / totalBytes.toFloat()
+                        if (!it.isSuccessful) {
+                            lastError = IllegalStateException("HTTP ${it.code}")
+                            return@repeat
                         }
 
-                        withContext(Dispatchers.Main) {
-                            onProgress(progress)
+                        val body = it.body ?: run {
+                            lastError = IllegalStateException("Empty APK body")
+                            return@repeat
                         }
+
+                        val dir = File(context.cacheDir, "updates").apply {
+                            mkdirs()
+                        }
+
+                        val safeFileName = info.fileName
+                            .ifBlank { "zhuravlik-${info.version}.apk" }
+                            .replace(Regex("[^a-zA-Z0-9._-]"), "_")
+
+                        val file = File(dir, safeFileName)
+
+                        if (file.exists()) {
+                            file.delete()
+                        }
+
+                        val total = body.contentLength().takeIf { len -> len > 0L }
+
+                        body.byteStream().use { input ->
+                            file.outputStream().use { output ->
+                                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                                var downloaded = 0L
+
+                                while (true) {
+                                    val read = input.read(buffer)
+                                    if (read == -1) break
+
+                                    output.write(buffer, 0, read)
+                                    downloaded += read
+
+                                    onProgress(total?.let { totalBytes ->
+                                        downloaded.toFloat() / totalBytes.toFloat()
+                                    })
+                                }
+
+                                output.flush()
+                            }
+                        }
+
+                        if (file.length() <= 0L) {
+                            file.delete()
+                            lastError = IllegalStateException("Downloaded APK is empty")
+                            return@repeat
+                        }
+
+                        onProgress(1f)
+
+                        Log.d(
+                            "APP_UPDATE",
+                            "apk saved=${file.absolutePath} size=${file.length()}"
+                        )
+
+                        return@withContext file
                     }
-
-                    output.flush()
+                } catch (error: Throwable) {
+                    lastError = error
+                    Log.e("APP_UPDATE", "download attempt failed ${attempt + 1}", error)
                 }
             }
 
-            withContext(Dispatchers.Main) {
-                onProgress(1f)
-            }
-
-            Log.d("APP_UPDATE", "apk saved=${file.absolutePath} size=${file.length()}")
-
-            file
+            Log.e("APP_UPDATE", "download failed after retries", lastError)
+            null
         }
-    }
 
     fun createInstallIntent(file: File): Intent {
         val uri: Uri = FileProvider.getUriForFile(
