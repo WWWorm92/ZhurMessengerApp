@@ -20,6 +20,7 @@ import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import android.os.Build
+import android.util.Log
 
 class NetworkProvider(context: Context, private val sessionStore: SessionStore) {
     private data class StoredCookie(
@@ -161,14 +162,22 @@ class NetworkProvider(context: Context, private val sessionStore: SessionStore) 
                 .build()
 
             val response = client.newCall(request).execute()
+
             response.use {
+                val body = it.body?.string().orEmpty()
+
+                Log.d("AUTH", "refresh status=${it.code} body=$body")
+
                 if (!it.isSuccessful) {
                     return null
                 }
-                val body = it.body?.string().orEmpty()
-                gson.fromJson(body, LoginResponse::class.java)?.token?.takeIf { token -> token.isNotBlank() }
+
+                gson.fromJson(body, LoginResponse::class.java)
+                    ?.token
+                    ?.takeIf { token -> token.isNotBlank() }
             }
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            Log.e("AUTH", "refresh failed", error)
             null
         }
     }

@@ -48,32 +48,45 @@ class AuthRepository(
     }
 
     suspend fun restoreSession(): Result<MeUserDto> {
-        return try {
-            val token = sessionStore.currentToken().trim()
+        var token = sessionStore.currentToken().trim()
 
-            if (token.isBlank()) {
-                return Result.failure(IllegalStateException("No saved token"))
-            }
-
-            val response = networkProvider.api.me("Bearer $token")
-
-            if (!response.isSuccessful) {
-                if (response.code() == 401 || response.code() == 403) {
-                    sessionStore.clear()
-                }
-
-                val errorBody = response.errorBody()?.string().orEmpty()
-                val parsed = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
-                return Result.failure(IllegalStateException(parsed?.error ?: "Session restore failed"))
-            }
-
-            val user = response.body()?.user
-                ?: return Result.failure(IllegalStateException("Empty session response"))
-
-            Result.success(user)
-        } catch (error: Exception) {
-            Result.failure(networkError(error))
+        if (token.isBlank()) {
+            return Result.failure(IllegalStateException("No saved token"))
         }
+
+        var response = networkProvider.api.me("Bearer $token")
+
+        if (!response.isSuccessful && (response.code() == 401 || response.code() == 403)) {
+            val refreshed = networkProvider.refreshSessionToken()
+
+            if (refreshed) {
+                token = sessionStore.currentToken().trim()
+
+                if (token.isNotBlank()) {
+                    response = networkProvider.api.me("Bearer $token")
+                }
+            }
+        }
+
+        if (!response.isSuccessful) {
+            if (response.code() == 401 || response.code() == 403) {
+                sessionStore.clear()
+            }
+
+            val errorBody = response.errorBody()?.string().orEmpty()
+            val parsed = runCatching {
+                gson.fromJson(errorBody, ErrorResponse::class.java)
+            }.getOrNull()
+
+            return Result.failure(
+                IllegalStateException(parsed?.error ?: "Session restore failed")
+            )
+        }
+
+        return Result.success(
+            response.body()?.user
+                ?: return Result.failure(IllegalStateException("Empty session response"))
+        )
     }
 
     fun logout() {

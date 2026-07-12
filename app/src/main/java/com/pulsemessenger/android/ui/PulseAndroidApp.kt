@@ -451,10 +451,36 @@ fun PulseAndroidApp() {
         realtimeSocketManager.setOnConnectionError { message ->
             scope.launch {
                 val text = message.orEmpty()
+
                 if (authViewModel.isAuthorized && text.contains("Unauthorized", ignoreCase = true)) {
+                    Log.w("AUTH", "Socket unauthorized, trying token refresh")
+
                     val refreshed = networkProvider.refreshSessionToken()
-                    if (!refreshed) {
-                        authViewModel.logout()
+
+                    if (refreshed) {
+                        val newToken = sessionStore.currentToken().trim()
+
+                        if (newToken.isNotBlank()) {
+                            Log.d("AUTH", "Token refreshed, reconnecting socket")
+
+                            realtimeConnected = false
+                            realtimeSocketManager.disconnect()
+
+                            delay(500)
+
+                            realtimeSocketManager.connect(
+                                newToken,
+                                sessionStore.ensureDeviceKey()
+                            )
+                        }
+                    } else {
+                        Log.w("AUTH", "Token refresh failed after socket unauthorized, keeping session")
+
+                        realtimeConnected = false
+
+                        // Важно:
+                        // НЕ делаем authViewModel.logout()
+                        // Иначе любое временное падение refresh/socket выбрасывает пользователя.
                     }
                 }
             }
