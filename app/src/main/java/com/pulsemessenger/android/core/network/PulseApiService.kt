@@ -132,6 +132,12 @@ interface PulseApiService {
         @Path("roomId") roomId: Long,
     ): Response<AttachmentsResponse>
 
+    @POST("/api/rooms/{roomId}/read")
+    suspend fun markRoomRead(
+        @Header("Authorization") authorization: String,
+        @Path("roomId") roomId: Long,
+    ): Response<MarkReadResponse>
+
     @POST("/api/rooms/{roomId}/messages")
     suspend fun sendRoomMessage(
         @Header("Authorization") authorization: String,

@@ -24,6 +24,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 
 @Composable
 fun InvitationsScreen(
@@ -34,6 +39,10 @@ fun InvitationsScreen(
         viewModel.load()
     }
 
+    BackHandler {
+        onBack()
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -41,18 +50,32 @@ fun InvitationsScreen(
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
-                Text("Приглашения", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                Text(
-                    "Входящие приглашения в комнаты",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.padding(end = 8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Назад",
+                    tint = MaterialTheme.colorScheme.onSurface
                 )
             }
-            OutlinedButton(onClick = onBack) {
-                Text("Назад")
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Приглашения",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+
+                Text(
+                    text = "Входящие приглашения в комнаты",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
             }
         }
 

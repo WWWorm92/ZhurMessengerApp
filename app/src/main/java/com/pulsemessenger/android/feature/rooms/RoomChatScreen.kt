@@ -116,6 +116,7 @@ import androidx.compose.material.icons.filled.Search
 import com.pulsemessenger.android.ui.ChatComposerTextField
 import com.pulsemessenger.android.ui.ReplyContextBar
 import com.pulsemessenger.android.ui.MessageMetaRow
+import com.pulsemessenger.android.core.notification.PulseNotificationStore
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RoomChatScreen(
@@ -146,6 +147,9 @@ fun RoomChatScreen(
     val uriHandler = LocalUriHandler.current
     val haptic = LocalHapticFeedback.current
     val context = LocalContext.current
+    LaunchedEffect(context, room.id) {
+        PulseNotificationStore.clear(context, "room:${room.id}")
+    }
     val canPost = remember(room.canPost) { room.canPost }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         uris.forEach { uri ->

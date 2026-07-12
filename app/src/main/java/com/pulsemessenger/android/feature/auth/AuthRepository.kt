@@ -48,45 +48,64 @@ class AuthRepository(
     }
 
     suspend fun restoreSession(): Result<MeUserDto> {
-        var token = sessionStore.currentToken().trim()
+        return try {
+            var token = sessionStore.currentToken().trim()
 
-        if (token.isBlank()) {
-            return Result.failure(IllegalStateException("No saved token"))
-        }
+            if (token.isBlank()) {
+                return Result.failure(IllegalStateException("No saved token"))
+            }
 
-        var response = networkProvider.api.me("Bearer $token")
+            var response = networkProvider.api.me("Bearer $token")
 
-        if (!response.isSuccessful && (response.code() == 401 || response.code() == 403)) {
-            val refreshed = networkProvider.refreshSessionToken()
+            if (!response.isSuccessful && (response.code() == 401 || response.code() == 403)) {
+                val refreshed = networkProvider.refreshSessionToken()
 
-            if (refreshed) {
+                if (!refreshed) {
+                    if (networkProvider.lastRefreshNetworkError) {
+                        return Result.failure(
+                            IllegalStateException("Нет соединения с сервером")
+                        )
+                    }
+
+                    sessionStore.clear()
+
+                    return Result.failure(
+                        IllegalStateException("Session refresh failed")
+                    )
+                }
+
                 token = sessionStore.currentToken().trim()
 
-                if (token.isNotBlank()) {
-                    response = networkProvider.api.me("Bearer $token")
+                if (token.isBlank()) {
+                    sessionStore.clear()
+                    return Result.failure(IllegalStateException("Empty refreshed token"))
                 }
-            }
-        }
 
-        if (!response.isSuccessful) {
-            if (response.code() == 401 || response.code() == 403) {
-                sessionStore.clear()
+                response = networkProvider.api.me("Bearer $token")
             }
 
-            val errorBody = response.errorBody()?.string().orEmpty()
-            val parsed = runCatching {
-                gson.fromJson(errorBody, ErrorResponse::class.java)
-            }.getOrNull()
+            if (!response.isSuccessful) {
+                if (response.code() == 401 || response.code() == 403) {
+                    sessionStore.clear()
+                }
 
-            return Result.failure(
-                IllegalStateException(parsed?.error ?: "Session restore failed")
+                val errorBody = response.errorBody()?.string().orEmpty()
+                val parsed = runCatching {
+                    gson.fromJson(errorBody, ErrorResponse::class.java)
+                }.getOrNull()
+
+                return Result.failure(
+                    IllegalStateException(parsed?.error ?: "Session restore failed")
+                )
+            }
+
+            Result.success(
+                response.body()?.user
+                    ?: return Result.failure(IllegalStateException("Empty session response"))
             )
+        } catch (error: Exception) {
+            Result.failure(networkError(error))
         }
-
-        return Result.success(
-            response.body()?.user
-                ?: return Result.failure(IllegalStateException("Empty session response"))
-        )
     }
 
     fun logout() {

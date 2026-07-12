@@ -119,6 +119,9 @@ import androidx.compose.material.icons.filled.Search
 import com.pulsemessenger.android.ui.ChatComposerTextField
 import com.pulsemessenger.android.ui.ReplyContextBar
 import com.pulsemessenger.android.ui.MessageMetaRow
+import androidx.compose.ui.platform.LocalContext
+import com.pulsemessenger.android.core.notification.PulseNotificationStore
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DmChatScreen(
@@ -148,6 +151,9 @@ fun DmChatScreen(
     val uriHandler = LocalUriHandler.current
     val haptic = LocalHapticFeedback.current
     val context = LocalContext.current
+    LaunchedEffect(context, peer.id) {
+        PulseNotificationStore.clear(context, "dm:${peer.id}")
+    }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         uris.forEach { uri ->
             onImageSelected(uri)

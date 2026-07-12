@@ -21,6 +21,9 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import android.os.Build
 import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 
 class NetworkProvider(context: Context, private val sessionStore: SessionStore) {
     private data class StoredCookie(
@@ -39,6 +42,10 @@ class NetworkProvider(context: Context, private val sessionStore: SessionStore) 
     private val gson: Gson = GsonBuilder().create()
     private val refreshLock = Any()
     private val cookieType = object : TypeToken<List<StoredCookie>>() {}.type
+
+    @Volatile
+    var lastRefreshNetworkError: Boolean = false
+        private set
 
     private val logging = HttpLoggingInterceptor().apply {
         level = HttpLoggingInterceptor.Level.BASIC
@@ -146,12 +153,26 @@ class NetworkProvider(context: Context, private val sessionStore: SessionStore) 
 
     val api: PulseApiService = retrofit.create(PulseApiService::class.java)
 
-    suspend fun refreshSessionToken(): Boolean {
-        val refreshed = synchronized(refreshLock) {
-            refreshAccessToken()
-        } ?: return false
-        sessionStore.saveToken(refreshed)
-        return true
+    suspend fun refreshSessionToken(): Boolean = withContext(Dispatchers.IO) {
+        lastRefreshNetworkError = false
+        repeat(3) { attempt ->
+            val refreshed = synchronized(refreshLock) {
+                refreshAccessToken()
+            }
+
+            if (!refreshed.isNullOrBlank()) {
+                sessionStore.saveToken(refreshed)
+                return@withContext true
+            }
+
+            Log.w("AUTH", "refresh attempt ${attempt + 1}/3 failed")
+
+            if (attempt < 2) {
+                delay(1200L)
+            }
+        }
+
+        false
     }
 
     private fun refreshAccessToken(): String? {
@@ -177,7 +198,12 @@ class NetworkProvider(context: Context, private val sessionStore: SessionStore) 
                     ?.takeIf { token -> token.isNotBlank() }
             }
         } catch (error: Exception) {
-            Log.e("AUTH", "refresh failed", error)
+            lastRefreshNetworkError = true
+            Log.e(
+                "AUTH",
+                "refresh failed type=${error.javaClass.simpleName} message=${error.message}",
+                error
+            )
             null
         }
     }
