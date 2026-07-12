@@ -113,7 +113,9 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
 import androidx.compose.material.icons.filled.Search
-
+import com.pulsemessenger.android.ui.ChatComposerTextField
+import com.pulsemessenger.android.ui.ReplyContextBar
+import com.pulsemessenger.android.ui.MessageMetaRow
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RoomChatScreen(
@@ -218,9 +220,9 @@ fun RoomChatScreen(
                     },
                 )
             }
-            .imePadding()
             .navigationBarsPadding()
-            .padding(top = 8.dp, start = 8.dp, end = 8.dp, bottom = 8.dp)
+            .imePadding()
+            .padding(top = 8.dp, start = 8.dp, end = 8.dp, bottom = 14.dp)
     ) {
         if (viewModel.selectionMode) {
             Row(
@@ -489,31 +491,12 @@ fun RoomChatScreen(
         }
 
         if (viewModel.replyToMessageId != null) {
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.12f)
-                )
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "Ответ: ${viewModel.replyToMessageContent.take(50)}",
-                        color = MaterialTheme.colorScheme.secondary,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedButton(onClick = viewModel::cancelReply) {
-                        Text("Отмена")
-                    }
-                }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
+            ReplyContextBar(
+                text = viewModel.replyToMessageContent.take(80),
+                onClose = viewModel::cancelReply
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
         }
 
         if (viewModel.pendingAttachments.isNotEmpty()) {
@@ -535,48 +518,77 @@ fun RoomChatScreen(
             Spacer(modifier = Modifier.height(8.dp))
         }
 
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(28.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
         ) {
-            IconButton(
-                onClick = { attachMenuExpanded = true },
-                enabled = canPost && !viewModel.isUploadingImage && viewModel.editingMessageId == null,
-            ) {
-                Icon(Icons.Default.AttachFile, contentDescription = "Прикрепить")
-            }
-            OutlinedTextField(
-                value = viewModel.draft,
-                onValueChange = onDraftChange,
+            Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .heightIn(min = 48.dp, max = 120.dp),
-                placeholder = { Text("Сообщение") },
-                maxLines = 5,
-                enabled = canPost,
-                shape = RoundedCornerShape(26.dp),
-            )
-            IconButton(onClick = { showEmojiPicker = true }, enabled = canPost) {
-                Icon(Icons.Default.TagFaces, contentDescription = "Emoji")
-            }
-            FilledIconButton(
-                onClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    viewModel.sendMessage(context)
-                },
-                enabled = !viewModel.isLoading &&
-                    canPost &&
-                    !viewModel.isUploadingImage &&
-                    (
-                        viewModel.draft.isNotBlank() ||
-                            viewModel.pendingAttachments.isNotEmpty() ||
-                            viewModel.editingMessageId != null
-                        ),
+                    .fillMaxWidth()
+                    .padding(horizontal = 6.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    imageVector = if (viewModel.editingMessageId != null) Icons.Default.Check else Icons.AutoMirrored.Filled.Send,
-                    contentDescription = if (viewModel.editingMessageId != null) "Сохранить" else "Отправить",
+                Box {
+                    IconButton(
+                        onClick = { attachMenuExpanded = true },
+                        enabled = canPost && !viewModel.isUploadingImage && viewModel.editingMessageId == null,
+                    ) {
+                        Icon(Icons.Default.AttachFile, contentDescription = "Прикрепить")
+                    }
+
+                }
+
+                ChatComposerTextField(
+                    value = viewModel.draft,
+                    onValueChange = onDraftChange,
+                    modifier = Modifier.weight(1f),
+                    enabled = canPost,
+                    placeholder = when {
+                        viewModel.editingMessageId != null -> "Редактирование сообщения"
+                        !canPost -> "Нет прав на отправку"
+                        else -> "Сообщение"
+                    }
                 )
+
+                IconButton(
+                    onClick = { showEmojiPicker = true },
+                    enabled = canPost
+                ) {
+                    Icon(Icons.Default.TagFaces, contentDescription = "Emoji")
+                }
+
+                FilledIconButton(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        viewModel.sendMessage(context)
+                    },
+                    enabled = !viewModel.isLoading &&
+                            canPost &&
+                            !viewModel.isUploadingImage &&
+                            (
+                                    viewModel.draft.isNotBlank() ||
+                                            viewModel.pendingAttachments.isNotEmpty() ||
+                                            viewModel.editingMessageId != null
+                                    ),
+                ) {
+                    Icon(
+                        imageVector = if (viewModel.editingMessageId != null) {
+                            Icons.Default.Check
+                        } else {
+                            Icons.AutoMirrored.Filled.Send
+                        },
+                        contentDescription = if (viewModel.editingMessageId != null) {
+                            "Сохранить"
+                        } else {
+                            "Отправить"
+                        },
+                    )
+                }
             }
         }
 
@@ -769,92 +781,96 @@ private fun PendingAttachmentsPreview(
     onRemove: (Long) -> Unit,
     onOpenImage: (Uri) -> Unit,
 ) {
-    Card(
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.90f)
-        )
+    Column(
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.padding(10.dp)) {
-            if (isUploading) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                Spacer(modifier = Modifier.height(8.dp))
-            }
+        if (isUploading) {
+            LinearProgressIndicator(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp)
+            )
 
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                items(attachments, key = { it.localId }) { attachment ->
-                    Box(
-                        modifier = Modifier.size(86.dp)
-                    ) {
-                        when (attachment.kind) {
-                            PendingAttachmentKind.Image -> {
-                                AsyncImage(
-                                    model = attachment.uri,
-                                    contentDescription = "Фото",
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                                        .clickable(enabled = !isUploading) {
-                                            onOpenImage(attachment.uri)
-                                        }
-                                )
-                            }
+            Spacer(modifier = Modifier.height(6.dp))
+        }
 
-                            PendingAttachmentKind.File -> {
-                                Card(
-                                    shape = RoundedCornerShape(14.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f)
-                                    ),
-                                    modifier = Modifier.fillMaxSize()
-                                ) {
-                                    Column(
-                                        modifier = Modifier.padding(8.dp),
-                                        verticalArrangement = Arrangement.Center
-                                    ) {
-                                        Text(
-                                            text = attachment.fileName.ifBlank { "Файл" },
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-
-                                        if (attachment.fileSize != null) {
-                                            Spacer(modifier = Modifier.height(4.dp))
-                                            Text(
-                                                text = formatFileSize(attachment.fileSize),
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            items(attachments, key = { it.localId }) { attachment ->
+                Box(
+                    modifier = Modifier
+                        .size(78.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.88f))
+                ) {
+                    when (attachment.kind) {
+                        PendingAttachmentKind.Image -> {
+                            AsyncImage(
+                                model = attachment.uri,
+                                contentDescription = "Фото",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clickable(enabled = !isUploading) {
+                                        onOpenImage(attachment.uri)
                                     }
+                            )
+                        }
+
+                        PendingAttachmentKind.File -> {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(8.dp),
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    text = "📎",
+                                    fontSize = 20.sp
+                                )
+
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                Text(
+                                    text = attachment.fileName.ifBlank { "Файл" },
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+
+                                if (attachment.fileSize != null) {
+                                    Text(
+                                        text = formatFileSize(attachment.fileSize),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                             }
                         }
+                    }
 
-                        IconButton(
-                            onClick = { onRemove(attachment.localId) },
-                            enabled = !isUploading,
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .size(28.dp)
-                                .background(
-                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-                                    shape = CircleShape
-                                )
-                        ) {
-                            Icon(
-                                Icons.Default.Close,
-                                contentDescription = "Убрать",
-                                modifier = Modifier.size(16.dp)
+                    IconButton(
+                        onClick = { onRemove(attachment.localId) },
+                        enabled = !isUploading,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(4.dp)
+                            .size(24.dp)
+                            .background(
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+                                shape = CircleShape
                             )
-                        }
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Убрать",
+                            modifier = Modifier.size(14.dp)
+                        )
                     }
                 }
             }
@@ -1102,17 +1118,19 @@ private fun RoomMessageBubble(
                                 }
                             }
                         }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = buildString {
-                                append(formatMessageTime(message.createdAt))
-                                if (message.editedAt != null && message.deletedAt == null) {
-                                    append(" • изменено")
-                                }
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Spacer(modifier = Modifier.height(5.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            MessageMetaRow(
+                                time = formatMessageTime(message.createdAt),
+                                isMine = false,
+                                isRead = false
+                            )
+                        }
                     }
                 }
                 if (message.reactions.isNotEmpty()) {

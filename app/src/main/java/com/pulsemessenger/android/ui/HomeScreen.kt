@@ -54,8 +54,30 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
-
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
+import android.graphics.Shader
+import android.os.Build
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.graphics.luminance
 enum class HomeTab { Dialogs, Rooms }
+private val DrawerBlue = Color(0xFF2196F3)
+private val DrawerBlueDarkContainer = Color(0xFF163B5C)
+private val DrawerBlueLightContainer = Color(0xFFE3F2FD)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -84,238 +106,186 @@ fun HomeScreen(
         HomeTab.Dialogs -> "Диалоги"
         HomeTab.Rooms -> "Комнаты"
     }
-
+    val drawerIsOpen =
+        drawerState.currentValue == DrawerValue.Open ||
+                drawerState.targetValue == DrawerValue.Open
     fun closeDrawer() {
         scope.launch { drawerState.close() }
     }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
+        scrimColor = Color.Black.copy(alpha = 0.34f),
         drawerContent = {
             ModalDrawerSheet(
-                modifier = Modifier.width(300.dp),
-                drawerContainerColor = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.width(332.dp),
+                drawerContainerColor = Color.Transparent,
+                drawerTonalElevation = 0.dp,
+                windowInsets = WindowInsets.safeDrawing
             ) {
-                Column(
+                GlassDrawerSurface(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
+                        .fillMaxSize()
+                        .padding(start = 8.dp, top = 8.dp, bottom = 8.dp, end = 10.dp)
                 ) {
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    Card(
-                        shape = RoundedCornerShape(24.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.86f)
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
-                            .clickable {
-                                closeDrawer()
-                                onOpenProfile()
-                            }
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            DialogAvatar(currentUserName, avatarUrl = currentUserAvatarUrl, modifier = Modifier.size(48.dp))
-                            Spacer(modifier = Modifier.width(14.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    currentUserName,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                if (currentUserSubtitle.isNotBlank()) {
-                                    Text(
-                                        currentUserSubtitle,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                }
-                            }
+                    DrawerProfileHero(
+                        currentUserName = currentUserName,
+                        currentUserSubtitle = currentUserSubtitle,
+                        currentUserAvatarUrl = currentUserAvatarUrl,
+                        onClick = {
+                            closeDrawer()
+                            onOpenProfile()
                         }
-                    }
+                    )
 
-                    Spacer(modifier = Modifier.height(16.dp))
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(18.dp))
 
-                    NavigationDrawerItem(
-                        icon = { Icon(Icons.Filled.QuestionAnswer, contentDescription = null) },
-                        label = { Text("Диалоги", fontWeight = FontWeight.Medium) },
+                    DrawerGlassItem(
+                        icon = Icons.Filled.QuestionAnswer,
+                        title = "Диалоги",
                         selected = currentTab == HomeTab.Dialogs,
                         onClick = {
                             onTabChange(HomeTab.Dialogs)
                             closeDrawer()
-                        },
-                        modifier = Modifier.padding(horizontal = 12.dp),
-                        colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
-                            selectedIconColor = MaterialTheme.colorScheme.primary,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                        )
+                        }
                     )
 
-                    NavigationDrawerItem(
-                        icon = { Icon(Icons.Filled.Groups, contentDescription = null) },
-                        label = { Text("Комнаты", fontWeight = FontWeight.Medium) },
+                    DrawerGlassItem(
+                        icon = Icons.Filled.Groups,
+                        title = "Комнаты",
                         selected = currentTab == HomeTab.Rooms,
                         onClick = {
                             onTabChange(HomeTab.Rooms)
                             closeDrawer()
-                        },
-                        modifier = Modifier.padding(horizontal = 12.dp),
-                        colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
-                            selectedIconColor = MaterialTheme.colorScheme.primary,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                        )
+                        }
                     )
 
-                    NavigationDrawerItem(
-                        icon = { Icon(Icons.Filled.MailOutline, contentDescription = null) },
-                        label = {
-                            if (invitationsCount > 0) {
-                                BadgedBox(badge = { Badge { Text("$invitationsCount") } }) {
-                                    Text("Приглашения", fontWeight = FontWeight.Medium)
-                                }
-                            } else {
-                                Text("Приглашения", fontWeight = FontWeight.Medium)
-                            }
-                        },
-                        selected = false,
+                    DrawerGlassItem(
+                        icon = Icons.Filled.MailOutline,
+                        title = "Приглашения",
+                        badge = invitationsCount.takeIf { it > 0 }?.toString(),
                         onClick = {
                             closeDrawer()
                             onOpenInvitations()
-                        },
-                        modifier = Modifier.padding(horizontal = 12.dp),
-                        colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
-                            selectedIconColor = MaterialTheme.colorScheme.primary,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                        )
+                        }
                     )
 
-                    /*NavigationDrawerItem(
-                        icon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                        label = { Text("Поиск сообщений", fontWeight = FontWeight.Medium) },
-                        selected = false,
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    DrawerGlassItem(
+                        icon = Icons.Filled.Search,
+                        title = "Поиск сообщений",
                         onClick = {
                             closeDrawer()
                             onOpenMessageSearch()
-                        },
-                        modifier = Modifier.padding(horizontal = 12.dp),
-                        colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
-                            selectedIconColor = MaterialTheme.colorScheme.primary,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                        )
-                    )*/
+                        }
+                    )
 
-                    Spacer(modifier = Modifier.height(8.dp))
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    NavigationDrawerItem(
-                        icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
-                        label = { Text("Настройки", fontWeight = FontWeight.Medium) },
-                        selected = false,
+                    DrawerGlassItem(
+                        icon = Icons.Filled.Settings,
+                        title = "Настройки",
                         onClick = {
                             closeDrawer()
                             onOpenSettings()
-                        },
-                        modifier = Modifier.padding(horizontal = 12.dp),
-                        colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
-                            selectedIconColor = MaterialTheme.colorScheme.primary,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                        )
+                        }
                     )
 
                     if (isAdmin) {
-                        NavigationDrawerItem(
-                            icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
-                            label = { Text("Консоль администратора", fontWeight = FontWeight.Medium) },
-                            selected = false,
+                        DrawerGlassItem(
+                            icon = Icons.Filled.Settings,
+                            title = "Консоль администратора",
                             onClick = {
                                 closeDrawer()
                                 onOpenAdmin()
-                            },
-                            modifier = Modifier.padding(horizontal = 12.dp),
-                            colors = NavigationDrawerItemDefaults.colors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
-                                selectedIconColor = MaterialTheme.colorScheme.primary,
-                                selectedTextColor = MaterialTheme.colorScheme.primary,
-                            )
+                            }
                         )
                     }
 
                     Spacer(modifier = Modifier.weight(1f))
 
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    NavigationDrawerItem(
-                        icon = { Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null) },
-                        label = { Text("Выйти", fontWeight = FontWeight.Medium) },
-                        selected = false,
+                    DrawerGlassItem(
+                        icon = Icons.AutoMirrored.Filled.ExitToApp,
+                        title = "Выйти",
+                        danger = true,
                         onClick = {
                             closeDrawer()
                             onLogout()
-                        },
-                        modifier = Modifier.padding(horizontal = 12.dp),
-                        colors = NavigationDrawerItemDefaults.colors(
-                            unselectedIconColor = MaterialTheme.colorScheme.error,
-                            unselectedTextColor = MaterialTheme.colorScheme.error,
-                        )
+                        }
                     )
-
-                    Spacer(modifier = Modifier.height(16.dp))
                 }
             }
         }
     ) {
         Scaffold(
+            modifier = Modifier.blur(if (drawerIsOpen) 18.dp else 0.dp),
             topBar = {
-                TopAppBar(
-                    title = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            val icon = when (currentTab) {
-                                HomeTab.Dialogs -> Icons.Filled.QuestionAnswer
-                                HomeTab.Rooms -> Icons.Filled.Groups
-                            }
-                            Icon(icon, contentDescription = null, modifier = Modifier.size(22.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(title, fontWeight = FontWeight.SemiBold)
-                        }
-                    },
-                    navigationIcon = {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 6.dp),
+                    shape = RoundedCornerShape(28.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.86f)
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 4.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         IconButton(onClick = { scope.launch { drawerState.open() } }) {
                             Icon(Icons.Filled.Menu, contentDescription = "Меню")
                         }
-                    },
-                    actions = {
+
+                        Column(
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = title,
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+
+                            Text(
+                                text = when (currentTab) {
+                                    HomeTab.Dialogs -> "Личные сообщения"
+                                    HomeTab.Rooms -> "Комнаты и обсуждения"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
                         IconButton(onClick = onOpenMessageSearch) {
                             Icon(Icons.Filled.Search, contentDescription = "Поиск")
                         }
-                        if (currentTab == HomeTab.Dialogs) {
-                            IconButton(onClick = onOpenSearchDialogs) {
-                                Icon(Icons.Filled.PersonAdd, contentDescription = "Новый диалог")
+
+                        IconButton(
+                            onClick = {
+                                if (currentTab == HomeTab.Dialogs) {
+                                    onOpenSearchDialogs()
+                                } else {
+                                    onOpenCreateRoom()
+                                }
                             }
-                        } else {
-                            IconButton(onClick = onOpenCreateRoom) {
-                                Icon(Icons.Filled.Add, contentDescription = "Создать комнату")
-                            }
+                        ) {
+                            Icon(
+                                imageVector = if (currentTab == HomeTab.Dialogs) {
+                                    Icons.Filled.PersonAdd
+                                } else {
+                                    Icons.Filled.Add
+                                },
+                                contentDescription = if (currentTab == HomeTab.Dialogs) {
+                                    "Новый диалог"
+                                } else {
+                                    "Создать комнату"
+                                }
+                            )
                         }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-                        titleContentColor = MaterialTheme.colorScheme.onBackground,
-                    )
-                )
+                    }
+                }
             }
         ) { padding ->
             Column(
@@ -328,6 +298,261 @@ fun HomeScreen(
                 } else {
                     roomsContent()
                 }
+            }
+        }
+    }
+}
+@Composable
+private fun GlassDrawerSurface(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val shape = RoundedCornerShape(30.dp)
+
+    Box(
+        modifier = modifier
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(shape)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.14f),
+                            Color.White.copy(alpha = 0.08f)
+                        )
+                    )
+                )
+                .border(
+                    BorderStroke(
+                        1.dp,
+                        Color.White.copy(alpha = 0.14f)
+                    ),
+                    shape
+                )
+                .then(
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        Modifier.graphicsLayer {
+                            compositingStrategy = CompositingStrategy.Offscreen
+                            renderEffect = android.graphics.RenderEffect
+                                .createBlurEffect(34f, 34f, Shader.TileMode.DECAL)
+                                .asComposeRenderEffect()
+                        }
+                    } else {
+                        Modifier
+                    }
+                )
+        )
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+                .windowInsetsPadding(WindowInsets.safeDrawing),
+            content = content
+        )
+    }
+}
+
+@Composable
+private fun DrawerProfileHero(
+    currentUserName: String,
+    currentUserSubtitle: String,
+    currentUserAvatarUrl: String,
+    onClick: () -> Unit,
+) {
+    Card(
+        shape = RoundedCornerShape(26.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color.White.copy(alpha = 0.10f)
+        ),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            DialogAvatar(
+                currentUserName,
+                avatarUrl = currentUserAvatarUrl,
+                modifier = Modifier.size(54.dp)
+            )
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = currentUserName,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+
+                Text(
+                    text = currentUserSubtitle.ifBlank { "Открыть профиль" },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
+
+            Card(
+                shape = RoundedCornerShape(50.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = DrawerBlue.copy(alpha = 0.22f)
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+            ) {
+                Text(
+                    text = "Профиль",
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DrawerSectionLabel(text: String) {
+    Text(
+        text = text.uppercase(),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.90f),
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(start = 8.dp, bottom = 8.dp, top = 2.dp)
+    )
+}
+
+@Composable
+private fun DrawerGlassItem(
+    icon: ImageVector,
+    title: String,
+    selected: Boolean = false,
+    danger: Boolean = false,
+    badge: String? = null,
+    onClick: () -> Unit,
+) {
+    val isLightTheme = MaterialTheme.colorScheme.background.luminance() > 0.5f
+
+    val selectedContainer = if (isLightTheme) {
+        DrawerBlueLightContainer.copy(alpha = 0.96f)
+    } else {
+        DrawerBlueDarkContainer.copy(alpha = 0.92f)
+    }
+
+    val normalContainer = if (isLightTheme) {
+        MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.78f)
+    }
+
+    val containerColor = when {
+        danger -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.92f)
+        selected -> selectedContainer
+        else -> normalContainer
+    }
+
+    val borderColor = when {
+        danger -> MaterialTheme.colorScheme.error.copy(alpha = 0.24f)
+        selected -> DrawerBlue.copy(alpha = if (isLightTheme) 0.34f else 0.38f)
+        else -> MaterialTheme.colorScheme.outline.copy(alpha = if (isLightTheme) 0.14f else 0.10f)
+    }
+
+    val iconColor = when {
+        danger -> MaterialTheme.colorScheme.error
+        selected -> DrawerBlue
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+
+    val titleColor = when {
+        danger -> MaterialTheme.colorScheme.error
+        selected -> if (isLightTheme) DrawerBlue else MaterialTheme.colorScheme.onSurface
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+
+    Card(
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = containerColor
+        ),
+        border = BorderStroke(1.dp, borderColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 10.dp)
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color.White.copy(alpha = 0.08f)
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(42.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = iconColor,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    color = titleColor,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
+                )
+            }
+
+            if (!badge.isNullOrBlank()) {
+                Card(
+                    shape = RoundedCornerShape(50.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = DrawerBlue
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                ) {
+                    Text(
+                        text = badge,
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            } else if (selected) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(DrawerBlue)
+                )
             }
         }
     }

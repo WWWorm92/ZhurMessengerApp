@@ -56,6 +56,9 @@ import com.pulsemessenger.android.ui.ListSkeletonCard
 import com.pulsemessenger.android.ui.UnreadBadge
 import com.pulsemessenger.android.ui.formatDateTime
 import com.pulsemessenger.android.ui.formatChatListTime
+import com.pulsemessenger.android.ui.ChatListRowCard
+import com.pulsemessenger.android.ui.ChatListFilterBar
+import com.pulsemessenger.android.ui.ChatListFilterItem
 
 private enum class RoomListFilter {
     All,
@@ -94,27 +97,24 @@ fun RoomsScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Row(
+        ChatListFilterBar(
+            selected = selectedFilter,
+            onSelected = { selectedFilter = it },
             modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 20.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            FilterChip(
-                selected = selectedFilter == RoomListFilter.All,
-                onClick = { selectedFilter = RoomListFilter.All },
-                label = { Text("Все") },
+            items = listOf(
+                ChatListFilterItem(RoomListFilter.All, "Все"),
+                ChatListFilterItem(
+                    RoomListFilter.Unread,
+                    "Новые",
+                    viewModel.rooms.count { !it.archived && it.unreadCount > 0 }
+                ),
+                ChatListFilterItem(
+                    RoomListFilter.Archived,
+                    "Архив",
+                    viewModel.rooms.count { it.archived }
+                ),
             )
-            FilterChip(
-                selected = selectedFilter == RoomListFilter.Unread,
-                onClick = { selectedFilter = RoomListFilter.Unread },
-                label = { Text("Непрочитанные") },
-            )
-            FilterChip(
-                selected = selectedFilter == RoomListFilter.Archived,
-                onClick = { selectedFilter = RoomListFilter.Archived },
-                label = { Text("Архив") },
-            )
-        }
+        )
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -179,7 +179,10 @@ fun RoomsScreen(
                     onRefresh = viewModel::load,
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    LazyColumn(
+                        modifier = Modifier.padding(horizontal = 20.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
                         if (!viewModel.error.isNullOrBlank()) {
                             item {
                                 Text(
@@ -223,113 +226,116 @@ private fun RoomCard(
     onToggleArchive: () -> Unit = {},
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
-    val interactionSource = remember { MutableInteractionSource() }
-    val pressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) 0.985f else 1f, label = "roomCardScale")
+
     Box {
-    Card(
-        shape = RoundedCornerShape(28.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)
-        ),
-        modifier = Modifier
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            }
-            .combinedClickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = { if (room.joined) onClick() },
-                onLongClick = { if (room.joined) menuExpanded = true }
-            )
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            DialogAvatar(room.name, avatarUrl = room.avatarUrl)
-            Spacer(modifier = Modifier.padding(horizontal = 12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        buildString {
-                            if (room.pinned) append("📌 ")
-                            if (room.muted) append("🔇 ")
-                            append(room.name)
-                        },
-                        fontWeight = FontWeight.SemiBold,
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    if (room.hasJoinRequest) {
-                        Text(
-                            "запрос отправлен",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.tertiary
-                        )
-                    }
+        ChatListRowCard(
+            title = room.name,
+            subtitle = room.description.ifBlank {
+                when {
+                    room.joined -> "Участников: ${room.membersCount}"
+                    room.accessType == "private" -> "Закрытая комната"
+                    else -> "Публичная комната"
                 }
-                Text(
-                    room.description.ifBlank {
-                        if (room.joined) "Участников: ${room.membersCount}" else room.accessType
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            Column(horizontalAlignment = Alignment.End) {
+            },
+            avatarUrl = room.avatarUrl,
+            time = room.lastMessageAt
+                ?.takeIf { it.isNotBlank() }
+                ?.let { formatChatListTime(it) }
+                ?: "",
+            unreadCount = room.unreadCount,
+            pinned = room.pinned,
+            muted = room.muted,
+            enabled = room.joined,
+            onClick = onClick,
+            onLongClick = {
+                if (room.joined) {
+                    menuExpanded = true
+                }
+            },
+            extraTitleContent = {
+                if (room.hasJoinRequest) {
+                    Text(
+                        text = "запрос отправлен",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        maxLines = 1
+                    )
+                }
+            },
+            trailingContent = {
                 if (!room.lastMessageAt.isNullOrBlank()) {
                     Text(
-                        formatChatListTime(room.lastMessageAt),
+                        text = formatChatListTime(room.lastMessageAt),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
                     )
+
                     Spacer(modifier = Modifier.height(6.dp))
                 }
-            if (!room.joined && !room.hasJoinRequest && isJoining) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-            } else if (!room.joined && !room.hasJoinRequest) {
-                if (room.accessType == "public" || room.hasInvitation) {
-                    Button(
-                        onClick = onJoin,
-                        shape = RoundedCornerShape(16.dp),
-                        contentPadding = ButtonDefaults.TextButtonContentPadding
-                    ) {
-                        Text("Вступить", style = MaterialTheme.typography.bodySmall)
+
+                when {
+                    !room.joined && !room.hasJoinRequest && isJoining -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp
+                        )
                     }
-                } else {
-                    OutlinedButton(
-                        onClick = onRequestJoin,
-                        shape = RoundedCornerShape(16.dp),
-                        contentPadding = ButtonDefaults.TextButtonContentPadding
-                    ) {
-                        Text("Запросить", style = MaterialTheme.typography.bodySmall)
+
+                    !room.joined && !room.hasJoinRequest && (room.accessType == "public" || room.hasInvitation) -> {
+                        Button(
+                            onClick = onJoin,
+                            shape = RoundedCornerShape(16.dp),
+                            contentPadding = ButtonDefaults.TextButtonContentPadding
+                        ) {
+                            Text("Вступить", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+
+                    !room.joined && !room.hasJoinRequest -> {
+                        OutlinedButton(
+                            onClick = onRequestJoin,
+                            shape = RoundedCornerShape(16.dp),
+                            contentPadding = ButtonDefaults.TextButtonContentPadding
+                        ) {
+                            Text("Запросить", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+
+                    else -> {
+                        UnreadBadge(room.unreadCount)
                     }
                 }
-            } else {
-                UnreadBadge(room.unreadCount)
             }
-            }
+        )
+
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text(if (room.pinned) "Открепить" else "Закрепить") },
+                onClick = {
+                    menuExpanded = false
+                    onTogglePin()
+                }
+            )
+
+            DropdownMenuItem(
+                text = { Text(if (room.muted) "Включить звук" else "Отключить звук") },
+                onClick = {
+                    menuExpanded = false
+                    onToggleMute()
+                }
+            )
+
+            DropdownMenuItem(
+                text = { Text(if (room.archived) "Разархивировать" else "Архивировать") },
+                onClick = {
+                    menuExpanded = false
+                    onToggleArchive()
+                }
+            )
         }
-    }
-    DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-        DropdownMenuItem(
-            text = { Text(if (room.pinned) "Открепить" else "Закрепить") },
-            onClick = { menuExpanded = false; onTogglePin() }
-        )
-        DropdownMenuItem(
-            text = { Text(if (room.muted) "Включить звук" else "Отключить звук") },
-            onClick = { menuExpanded = false; onToggleMute() }
-        )
-        DropdownMenuItem(
-            text = { Text(if (room.archived) "Разархивировать" else "Архивировать") },
-            onClick = { menuExpanded = false; onToggleArchive() }
-        )
-    }
     }
 }

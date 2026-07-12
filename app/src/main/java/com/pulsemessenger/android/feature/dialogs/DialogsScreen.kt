@@ -58,6 +58,9 @@ import com.pulsemessenger.android.ui.formatChatListTime
 import com.pulsemessenger.android.ui.formatMessageTime
 import com.pulsemessenger.android.ui.formatDayLabel
 import androidx.compose.foundation.lazy.itemsIndexed
+import com.pulsemessenger.android.ui.ChatListRowCard
+import com.pulsemessenger.android.ui.ChatListFilterBar
+import com.pulsemessenger.android.ui.ChatListFilterItem
 
 private enum class DialogListFilter {
     All,
@@ -89,26 +92,23 @@ fun DialogsScreen(
             .fillMaxSize()
             .padding(20.dp)
     ) {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            FilterChip(
-                selected = selectedFilter == DialogListFilter.All,
-                onClick = { selectedFilter = DialogListFilter.All },
-                label = { Text("Все") },
+        ChatListFilterBar(
+            selected = selectedFilter,
+            onSelected = { selectedFilter = it },
+            items = listOf(
+                ChatListFilterItem(DialogListFilter.All, "Все"),
+                ChatListFilterItem(
+                    DialogListFilter.Unread,
+                    "Новые",
+                    viewModel.users.count { !it.archived && it.unreadCount > 0 }
+                ),
+                ChatListFilterItem(
+                    DialogListFilter.Archived,
+                    "Архив",
+                    viewModel.users.count { it.archived }
+                ),
             )
-            FilterChip(
-                selected = selectedFilter == DialogListFilter.Unread,
-                onClick = { selectedFilter = DialogListFilter.Unread },
-                label = { Text("Непрочитанные") },
-            )
-            FilterChip(
-                selected = selectedFilter == DialogListFilter.Archived,
-                onClick = { selectedFilter = DialogListFilter.Archived },
-                label = { Text("Архив") },
-            )
-        }
+        )
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -189,86 +189,63 @@ private fun DialogUserCard(
     onClearDialog: () -> Unit = {},
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
-    val interactionSource = remember { MutableInteractionSource() }
-    val pressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) 0.985f else 1f, label = "dialogCardScale")
+
     Box {
-    Card(
-        shape = RoundedCornerShape(28.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)
-        ),
-        modifier = Modifier
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            }
-            .combinedClickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick,
-                onLongClick = { menuExpanded = true }
-            )
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
+        ChatListRowCard(
+            title = user.displayName,
+            subtitle = if (user.lastMessage.isNotBlank()) {
+                user.lastMessage
+            } else {
+                "@${user.username}"
+            },
+            avatarUrl = user.avatarUrl,
+            time = user.lastMessageAt
+                ?.takeIf { it.isNotBlank() }
+                ?.let { formatChatListTime(it) }
+                ?: "",
+            unreadCount = user.unreadCount,
+            online = user.online,
+            pinned = user.pinned,
+            muted = user.muted,
+            onClick = onClick,
+            onLongClick = { menuExpanded = true }
+        )
+
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false }
         ) {
-            DialogAvatar(user.displayName, avatarUrl = user.avatarUrl)
-            Spacer(modifier = Modifier.padding(horizontal = 12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        buildString {
-                            if (user.pinned) append("📌 ")
-                            if (user.muted) append("🔇 ")
-                            append(user.displayName)
-                        },
-                        fontWeight = FontWeight.SemiBold,
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    if (user.online) OnlineDot()
+            DropdownMenuItem(
+                text = { Text(if (user.pinned) "Открепить" else "Закрепить") },
+                onClick = {
+                    menuExpanded = false
+                    onTogglePin()
                 }
-                Text(
-                    if (user.lastMessage.isNotBlank()) user.lastMessage else "@${user.username}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Column(horizontalAlignment = Alignment.End) {
-                if (!user.lastMessageAt.isNullOrBlank()) {
-                    Text(
-                        formatChatListTime(user.lastMessageAt),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
+            )
+
+            DropdownMenuItem(
+                text = { Text(if (user.muted) "Включить звук" else "Отключить звук") },
+                onClick = {
+                    menuExpanded = false
+                    onToggleMute()
                 }
-            UnreadBadge(user.unreadCount)
-            }
+            )
+
+            DropdownMenuItem(
+                text = { Text(if (user.archived) "Разархивировать" else "Архивировать") },
+                onClick = {
+                    menuExpanded = false
+                    onToggleArchive()
+                }
+            )
+
+            DropdownMenuItem(
+                text = { Text("Очистить диалог", color = MaterialTheme.colorScheme.error) },
+                onClick = {
+                    menuExpanded = false
+                    onClearDialog()
+                }
+            )
         }
-    }
-    DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-        DropdownMenuItem(
-            text = { Text(if (user.pinned) "Открепить" else "Закрепить") },
-            onClick = { menuExpanded = false; onTogglePin() }
-        )
-        DropdownMenuItem(
-            text = { Text(if (user.muted) "Включить звук" else "Отключить звук") },
-            onClick = { menuExpanded = false; onToggleMute() }
-        )
-        DropdownMenuItem(
-            text = { Text(if (user.archived) "Разархивировать" else "Архивировать") },
-            onClick = { menuExpanded = false; onToggleArchive() }
-        )
-        DropdownMenuItem(
-            text = { Text("Очистить диалог", color = MaterialTheme.colorScheme.error) },
-            onClick = { menuExpanded = false; onClearDialog() }
-        )
-    }
     }
 }
