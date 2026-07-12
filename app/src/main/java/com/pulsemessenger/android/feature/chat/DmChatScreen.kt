@@ -115,6 +115,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
+import androidx.compose.material.icons.filled.Search
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DmChatScreen(
@@ -249,24 +251,53 @@ fun DmChatScreen(
                 }
             }
         } else {
-            Row(
+            Card(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                shape = RoundedCornerShape(28.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 2.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
                     }
-                    DialogAvatar(peer.displayName, avatarUrl = peer.avatarUrl, modifier = Modifier.size(40.dp))
+
+                    DialogAvatar(
+                        peer.displayName,
+                        avatarUrl = peer.avatarUrl,
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clickable {
+                                showProfileSheet = true
+                                viewModel.loadProfileAttachments()
+                            }
+                    )
+
                     Spacer(modifier = Modifier.width(10.dp))
+
                     Column(
-                        modifier = Modifier.clickable {
-                            showProfileSheet = true
-                            viewModel.loadProfileAttachments()
-                        }
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable {
+                                showProfileSheet = true
+                                viewModel.loadProfileAttachments()
+                            }
                     ) {
-                        Text(peer.displayName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = peer.displayName,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+
                         Text(
                             text = when {
                                 viewModel.isPeerTyping -> "печатает..."
@@ -277,13 +308,19 @@ fun DmChatScreen(
                                 MaterialTheme.colorScheme.primary
                             } else {
                                 MaterialTheme.colorScheme.onSurfaceVariant
-                            }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
+                    }
+
+                    IconButton(onClick = onOpenSearch) {
+                        Icon(Icons.Default.Search, contentDescription = "Поиск")
                     }
                 }
             }
         }
-
         Spacer(modifier = Modifier.height(8.dp))
 
         if (viewModel.isLoading && viewModel.messages.isEmpty()) {

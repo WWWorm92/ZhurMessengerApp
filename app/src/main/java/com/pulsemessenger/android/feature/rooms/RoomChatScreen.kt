@@ -112,6 +112,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
+import androidx.compose.material.icons.filled.Search
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -248,34 +249,75 @@ fun RoomChatScreen(
                 }
             }
         } else {
-            Row(
+            Card(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                shape = RoundedCornerShape(28.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 2.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
                     }
+
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.22f))
+                            .clickable {
+                                showProfileSheet = true
+                                viewModel.loadProfileAttachments()
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = room.name.trim().take(1).uppercase().ifBlank { "#" },
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(10.dp))
+
                     Column(
                         modifier = Modifier
+                            .weight(1f)
                             .clickable {
                                 showProfileSheet = true
                                 viewModel.loadProfileAttachments()
                             }
-                            .weight(1f)
                     ) {
-                    Text(room.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text(
-                        text = viewModel.roomStatusText().ifBlank { buildRoomMeta(room) },
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1
-                    )
-                }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = room.name,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+
+                        Text(
+                            text = viewModel.roomStatusText().ifBlank { buildRoomMeta(room) },
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    IconButton(onClick = onOpenSearch) {
+                        Icon(Icons.Default.Search, contentDescription = "Поиск")
+                    }
+
                     if (onOpenSettings != null) {
-                        OutlinedButton(onClick = onOpenSettings, modifier = Modifier.padding(end = 6.dp)) {
+                        IconButton(onClick = onOpenSettings) {
                             Text("⚙")
                         }
                     }
