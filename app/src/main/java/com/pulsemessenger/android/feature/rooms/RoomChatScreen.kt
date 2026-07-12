@@ -104,6 +104,9 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 
 @Composable
 fun RoomChatScreen(
@@ -208,7 +211,9 @@ fun RoomChatScreen(
                     },
                 )
             }
-            .padding(top = 16.dp, start = 20.dp, end = 20.dp, bottom = 20.dp)
+            .imePadding()
+            .navigationBarsPadding()
+            .padding(top = 8.dp, start = 8.dp, end = 8.dp, bottom = 8.dp)
     ) {
         if (viewModel.selectionMode) {
             Row(
@@ -272,7 +277,7 @@ fun RoomChatScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         if (viewModel.isLoading && viewModel.messages.isEmpty()) {
             Column(
@@ -303,7 +308,7 @@ fun RoomChatScreen(
                         Text("Не удалось загрузить комнату", fontWeight = FontWeight.SemiBold)
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(viewModel.error ?: "", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
                         Button(onClick = viewModel::loadMessages) {
                             Text("Повторить")
                         }
@@ -316,7 +321,7 @@ fun RoomChatScreen(
             LazyColumn(
                 modifier = Modifier.weight(1f),
                 state = listState,
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 if (viewModel.isLoadingOlder) {
                     item {
@@ -520,11 +525,13 @@ fun RoomChatScreen(
             OutlinedTextField(
                 value = viewModel.draft,
                 onValueChange = onDraftChange,
-                modifier = Modifier.weight(1f),
-                label = { Text("Сообщение в комнату") },
-                maxLines = 4,
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp, max = 120.dp),
+                placeholder = { Text("Сообщение") },
+                maxLines = 5,
                 enabled = canPost,
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(26.dp),
             )
             IconButton(onClick = { showEmojiPicker = true }, enabled = canPost) {
                 Icon(Icons.Default.TagFaces, contentDescription = "Emoji")
@@ -782,6 +789,7 @@ private fun RoomMessageBubble(
     var menuExpanded by remember(message.id) { mutableStateOf(false) }
     var confirmDelete by remember(message.id) { mutableStateOf(false) }
     val resolvedFileUrl = if (message.fileUrl.isNotBlank()) resolveBackendMediaUrl(message.fileUrl) else ""
+    val bubbleModifier = Modifier.widthIn(max = 292.dp)
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -798,17 +806,17 @@ private fun RoomMessageBubble(
             Column(horizontalAlignment = if (isMine) Alignment.End else Alignment.Start) {
                 Card(
                     modifier = if (message.deletedAt == null && !selectionMode) {
-                        Modifier.combinedClickable(
+                        bubbleModifier.combinedClickable(
                             onClick = { menuExpanded = true },
                             onLongClick = { onSelect() }
                         )
                     } else if (message.deletedAt == null && selectionMode) {
-                        Modifier.combinedClickable(
+                        bubbleModifier.combinedClickable(
                             onClick = { onToggleSelect() },
                             onLongClick = {}
                         )
                     } else {
-                        Modifier
+                        bubbleModifier
                     },
                     border = if (isSelected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
                     shape = RoundedCornerShape(
@@ -851,9 +859,15 @@ private fun RoomMessageBubble(
                             AsyncImage(
                                 model = resolveBackendMediaUrl(message.imageUrl),
                                 contentDescription = "image",
+                                contentScale = ContentScale.Crop,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable(enabled = !selectionMode) { onOpenImage(resolveBackendMediaUrl(message.imageUrl)) }
+                                    .heightIn(min = 120.dp, max = 280.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .clickable(enabled = !selectionMode) {
+                                        onOpenImage(resolveBackendMediaUrl(message.imageUrl))
+                                    }
                             )
                         }
                         if (message.poll != null && message.deletedAt == null) {
