@@ -29,6 +29,11 @@ import androidx.compose.ui.unit.dp
 import com.pulsemessenger.android.core.network.SearchResultDto
 import com.pulsemessenger.android.ui.DialogAvatar
 import com.pulsemessenger.android.ui.formatDateTime
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 
 @Composable
 fun SearchScreen(
@@ -37,6 +42,9 @@ fun SearchScreen(
     onOpenDm: (Long, String) -> Unit,
     onOpenRoom: (Long, String) -> Unit,
 ) {
+    BackHandler {
+        onBack()
+    }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -44,11 +52,33 @@ fun SearchScreen(
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Поиск сообщений", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            OutlinedButton(onClick = onBack) { Text("Готово") }
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.padding(end = 8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Назад",
+                    tint = MaterialTheme.colorScheme.onSurface
+                )
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Поиск сообщений",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+
+                Text(
+                    text = "Поиск по диалогам и комнатам",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(12.dp))

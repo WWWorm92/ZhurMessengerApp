@@ -29,7 +29,19 @@ class RealtimeSocketManager(
         disconnect()
         try {
             val options = IO.Options.builder()
-                .setAuth(mapOf("token" to token, "deviceKey" to deviceKey))
+                .setAuth(
+                    mapOf(
+                        "token" to token,
+                        "deviceKey" to deviceKey,
+                        "client" to "android"
+                    )
+                ).setAuth(
+                    mapOf(
+                        "token" to token,
+                        "deviceKey" to deviceKey,
+                        "client" to "android"
+                    )
+                )
                 .build()
             socket = IO.socket(baseUrl, options).apply {
                 on(Socket.EVENT_CONNECT) {

@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
 package com.pulsemessenger.android.feature.rooms
 
 import android.net.Uri
@@ -46,13 +48,14 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.pulsemessenger.android.core.network.JoinRequestDto
+import com.pulsemessenger.android.core.network.RoomDetailResponse
 import com.pulsemessenger.android.core.network.RoomMemberDto
 import com.pulsemessenger.android.ui.DialogAvatar
-import com.pulsemessenger.android.ui.GlassCard
 import com.pulsemessenger.android.ui.OnlineDot
 import com.pulsemessenger.android.ui.resolveBackendMediaUrl
 
@@ -80,7 +83,9 @@ fun RoomSettingsScreen(
         uri?.let { viewModel.uploadAvatar(context, it) }
     }
 
-    LaunchedEffect(roomId) { viewModel.load(roomId) }
+    LaunchedEffect(roomId) {
+        viewModel.load(roomId)
+    }
 
     val detail = viewModel.roomDetail
 
@@ -89,240 +94,93 @@ fun RoomSettingsScreen(
             .fillMaxSize()
             .padding(top = 16.dp, start = 20.dp, end = 20.dp, bottom = 20.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("Настройки комнаты", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            OutlinedButton(onClick = onBack) { Text("Готово") }
-        }
+        RoomSettingsHeader(onBack = onBack)
 
         Spacer(modifier = Modifier.height(16.dp))
 
         if (viewModel.isLoading) {
-            CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
         } else if (detail == null) {
-            if (viewModel.error != null) {
-                Text(viewModel.error ?: "", color = MaterialTheme.colorScheme.error, modifier = Modifier.align(Alignment.CenterHorizontally))
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    text = viewModel.error ?: "Не удалось загрузить настройки комнаты",
+                    color = MaterialTheme.colorScheme.error,
+                    textAlign = TextAlign.Center,
+                )
             }
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            val canManage = detail.canManage || detail.canOwn
+
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
                 item {
-                    GlassCard(modifier = Modifier.fillMaxWidth(), radius = 30, padding = 20) {
-                    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Box(
-                            modifier = Modifier
-                                .size(108.dp)
-                                .clip(CircleShape)
-                                .clickable { avatarPicker.launch("image/*") }
-                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (detail.avatarUrl.isNotBlank()) {
-                                AsyncImage(
-                                    model = resolveBackendMediaUrl(detail.avatarUrl),
-                                    contentDescription = "Room avatar",
-                                    modifier = Modifier.size(96.dp).clip(CircleShape),
-                                    contentScale = ContentScale.Crop
+                    RoomHeroCard(
+                        detail = detail,
+                        isUploadingAvatar = viewModel.isUploadingAvatar,
+                        onAvatarClick = { avatarPicker.launch("image/*") },
+                    )
+                }
+
+                item {
+                    RoomSettingsTabBar(
+                        selected = tab,
+                        membersCount = detail.members.size,
+                        requestsCount = viewModel.joinRequests.size,
+                        showManageTabs = canManage,
+                        onSelected = { tab = it },
+                    )
+                }
+
+                when (tab) {
+                    RoomSettingsTab.General -> {
+                        item {
+                            GeneralSettingsCard(
+                                viewModel = viewModel,
+                                roomId = roomId,
+                            )
+                        }
+                    }
+
+                    RoomSettingsTab.Members -> {
+                        item {
+                            if (canManage) {
+                                MembersCard(
+                                    roomId = roomId,
+                                    detail = detail,
+                                    viewModel = viewModel,
                                 )
                             } else {
-                                DialogAvatar(detail.name, modifier = Modifier.size(72.dp))
-                            }
-                            if (viewModel.isUploadingAvatar) {
-                                CircularProgressIndicator(modifier = Modifier.size(32.dp))
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(detail.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            if (detail.accessType == "private") "Закрытая комната" else "Публичная комната",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text("Нажмите, чтобы изменить", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    }
-                }
-                item {
-                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        SegmentedButton(selected = tab == RoomSettingsTab.General, onClick = { tab = RoomSettingsTab.General }, shape = SegmentedButtonDefaults.itemShape(0, 4)) { Text("Общее") }
-                        SegmentedButton(selected = tab == RoomSettingsTab.Members, onClick = { tab = RoomSettingsTab.Members }, shape = SegmentedButtonDefaults.itemShape(1, 4)) { Text("Участники") }
-                        SegmentedButton(selected = tab == RoomSettingsTab.Requests, onClick = { tab = RoomSettingsTab.Requests }, shape = SegmentedButtonDefaults.itemShape(2, 4)) { Text("Заявки") }
-                        SegmentedButton(selected = tab == RoomSettingsTab.Actions, onClick = { tab = RoomSettingsTab.Actions }, shape = SegmentedButtonDefaults.itemShape(3, 4)) { Text("Действия") }
-                    }
-                }
-                item {
-                    if (tab != RoomSettingsTab.General) return@item
-                    GlassCard(modifier = Modifier.fillMaxWidth(), radius = 26, padding = 16) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text("Основные настройки", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                            Spacer(modifier = Modifier.height(12.dp))
-                            OutlinedTextField(
-                                value = viewModel.editName,
-                                onValueChange = { viewModel.editName = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Название") },
-                                singleLine = true,
-                                shape = RoundedCornerShape(12.dp),
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            OutlinedTextField(
-                                value = viewModel.editDescription,
-                                onValueChange = { viewModel.editDescription = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Описание") },
-                                maxLines = 3,
-                                shape = RoundedCornerShape(12.dp),
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            OutlinedTextField(
-                                value = viewModel.editSlug,
-                                onValueChange = { viewModel.editSlug = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Ссылка (slug)") },
-                                singleLine = true,
-                                shape = RoundedCornerShape(12.dp),
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text("Тип доступа", style = MaterialTheme.typography.bodySmall)
-                            Spacer(modifier = Modifier.height(6.dp))
-                            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                                SegmentedButton(
-                                    selected = viewModel.editAccessType == "public",
-                                    onClick = { viewModel.editAccessType = "public" },
-                                    shape = SegmentedButtonDefaults.itemShape(0, 2),
-                                ) { Text("Публичная") }
-                                SegmentedButton(
-                                    selected = viewModel.editAccessType == "private",
-                                    onClick = { viewModel.editAccessType = "private" },
-                                    shape = SegmentedButtonDefaults.itemShape(1, 2),
-                                ) { Text("Приватная") }
-                            }
-                            if (!viewModel.error.isNullOrBlank() && !viewModel.saveSuccess) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(viewModel.error ?: "", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                            }
-                            if (viewModel.saveSuccess) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text("Сохранено", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
-                            }
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Button(
-                                onClick = { viewModel.saveSettings(roomId) },
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp),
-                                enabled = !viewModel.isSaving
-                            ) {
-                                if (viewModel.isSaving) {
-                                    CircularProgressIndicator(modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
-                                } else { Text("Сохранить") }
+                                EmptyModernCard("У вас нет доступа к управлению участниками")
                             }
                         }
                     }
-                }
 
-                if (detail.canManage || detail.canOwn) {
-                    item {
-                        if (tab != RoomSettingsTab.Members) return@item
-                        GlassCard(modifier = Modifier.fillMaxWidth(), radius = 26, padding = 16) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("Участники (${detail.members.size})", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                                    if (detail.canInvite) {
-                                        OutlinedButton(onClick = {
-                                            viewModel.loadInviteCandidates(roomId)
-                                            viewModel.showInviteSheet = true
-                                        }) { Text("+ Пригласить") }
-                                    }
-                                }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                detail.members.forEach { member ->
-                                    MemberRow(
-                                        member = member,
-                                        canManageOthers = detail.canOwn || (detail.canManage && detail.createdBy != member.id),
-                                        isRemoving = viewModel.removingMemberId == member.id,
-                                        isUpdating = viewModel.updatingMemberId == member.id,
-                                        onRemove = { viewModel.removeMember(roomId, member.id) },
-                                        onToggleRole = { viewModel.toggleMemberRole(roomId, member) },
-                                    )
-                                    if (member != detail.members.last()) {
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                    }
-                                }
+                    RoomSettingsTab.Requests -> {
+                        item {
+                            if (canManage) {
+                                RequestsCard(
+                                    roomId = roomId,
+                                    viewModel = viewModel,
+                                )
+                            } else {
+                                EmptyModernCard("У вас нет доступа к заявкам")
                             }
                         }
                     }
-                }
 
-                if (detail.canManage || detail.canOwn) {
-                    item {
-                        if (tab != RoomSettingsTab.Requests) return@item
-                        GlassCard(modifier = Modifier.fillMaxWidth(), radius = 26, padding = 16) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("Запросы на вступление (${viewModel.joinRequests.size})", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                                    OutlinedButton(onClick = { viewModel.loadJoinRequests(roomId) }) {
-                                        if (viewModel.isLoadingRequests) {
-                                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                                        } else { Text("Обновить") }
-                                    }
-                                }
-                                if (viewModel.joinRequests.isEmpty()) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text("Нет активных запросов", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                                } else {
-                                    viewModel.joinRequests.forEach { request ->
-                                        JoinRequestRow(
-                                            request = request,
-                                            onApprove = { viewModel.approveRequest(roomId, request.userId) },
-                                            onDecline = { viewModel.declineRequest(roomId, request.userId) },
-                                        )
-                                        if (request != viewModel.joinRequests.last()) {
-                                            Spacer(modifier = Modifier.height(6.dp))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                item {
-                    if (tab != RoomSettingsTab.Actions) return@item
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { showLeaveConfirm = true },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp),
-                            enabled = !viewModel.isLeaving
-                        ) {
-                            if (viewModel.isLeaving) { CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp) }
-                            else { Text("Покинуть комнату") }
-                        }
-                        if (detail.canOwn) {
-                            Button(
-                                onClick = { showDeleteConfirm = true },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                                enabled = !viewModel.isDeleting
-                            ) {
-                                if (viewModel.isDeleting) { CircularProgressIndicator(modifier = Modifier.size(18.dp), color = MaterialTheme.colorScheme.onError, strokeWidth = 2.dp) }
-                                else { Text("Удалить") }
-                            }
+                    RoomSettingsTab.Actions -> {
+                        item {
+                            ActionsCard(
+                                canOwn = detail.canOwn,
+                                isLeaving = viewModel.isLeaving,
+                                isDeleting = viewModel.isDeleting,
+                                onLeave = { showLeaveConfirm = true },
+                                onDelete = { showDeleteConfirm = true },
+                            )
                         }
                     }
                 }
@@ -334,14 +192,23 @@ fun RoomSettingsScreen(
         AlertDialog(
             onDismissRequest = { showLeaveConfirm = false },
             title = { Text("Покинуть комнату?") },
-            text = { Text("Вы уверены? Вы сможете вернуться только по новому приглашению.") },
+            text = { Text("Вы сможете вернуться только по новому приглашению, если комната закрытая.") },
             confirmButton = {
-                Button(onClick = {
-                    showLeaveConfirm = false
-                    viewModel.leaveRoom(roomId, onRoomLeft)
-                }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("Покинуть") }
+                Button(
+                    onClick = {
+                        showLeaveConfirm = false
+                        viewModel.leaveRoom(roomId, onRoomLeft)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Покинуть")
+                }
             },
-            dismissButton = { OutlinedButton(onClick = { showLeaveConfirm = false }) { Text("Отмена") } }
+            dismissButton = {
+                OutlinedButton(onClick = { showLeaveConfirm = false }) {
+                    Text("Отмена")
+                }
+            }
         )
     }
 
@@ -349,14 +216,23 @@ fun RoomSettingsScreen(
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
             title = { Text("Удалить комнату?") },
-            text = { Text("Это действие необратимо. Вся история сообщений будет удалена.") },
+            text = { Text("Это действие необратимо. История сообщений и настройки комнаты будут удалены.") },
             confirmButton = {
-                Button(onClick = {
-                    showDeleteConfirm = false
-                    viewModel.deleteRoom(roomId, onRoomDeleted)
-                }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("Удалить") }
+                Button(
+                    onClick = {
+                        showDeleteConfirm = false
+                        viewModel.deleteRoom(roomId, onRoomDeleted)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Удалить")
+                }
             },
-            dismissButton = { OutlinedButton(onClick = { showDeleteConfirm = false }) { Text("Отмена") } }
+            dismissButton = {
+                OutlinedButton(onClick = { showDeleteConfirm = false }) {
+                    Text("Отмена")
+                }
+            }
         )
     }
 
@@ -371,6 +247,488 @@ fun RoomSettingsScreen(
 }
 
 @Composable
+private fun RoomSettingsHeader(onBack: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Настройки комнаты",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "Профиль, доступ и участники",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        OutlinedButton(
+            onClick = onBack,
+            shape = RoundedCornerShape(16.dp),
+        ) {
+            Text("Готово")
+        }
+    }
+}
+
+@Composable
+private fun RoomHeroCard(
+    detail: RoomDetailResponse,
+    isUploadingAvatar: Boolean,
+    onAvatarClick: () -> Unit,
+) {
+    ModernCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(92.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onAvatarClick)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (detail.avatarUrl.isNotBlank()) {
+                    AsyncImage(
+                        model = resolveBackendMediaUrl(detail.avatarUrl),
+                        contentDescription = "Аватар комнаты",
+                        modifier = Modifier
+                            .size(86.dp)
+                            .clip(CircleShape),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    DialogAvatar(detail.name, modifier = Modifier.size(68.dp))
+                }
+
+                if (isUploadingAvatar) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.68f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(30.dp), strokeWidth = 2.dp)
+                    }
+                }
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = detail.name,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = detail.description.ifBlank { "Описание не заполнено" },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    InfoPill(
+                        text = if (detail.accessType == "private") "Закрытая" else "Публичная",
+                        selected = true,
+                    )
+                    InfoPill(text = "${detail.members.size} участников")
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = if (detail.slug.isNotBlank()) "#${detail.slug}" else "Ссылка не задана",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        Text(
+            text = "Нажмите на аватар, чтобы заменить изображение комнаты",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun RoomSettingsTabBar(
+    selected: RoomSettingsTab,
+    membersCount: Int,
+    requestsCount: Int,
+    showManageTabs: Boolean,
+    onSelected: (RoomSettingsTab) -> Unit,
+) {
+    val tabs = buildList {
+        add(RoomSettingsTab.General)
+        if (showManageTabs) {
+            add(RoomSettingsTab.Members)
+            add(RoomSettingsTab.Requests)
+        }
+        add(RoomSettingsTab.Actions)
+    }
+
+    Card(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f)
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            tabs.forEach { item ->
+                TabPill(
+                    title = when (item) {
+                        RoomSettingsTab.General -> "Общее"
+                        RoomSettingsTab.Members -> "Участники"
+                        RoomSettingsTab.Requests -> "Заявки"
+                        RoomSettingsTab.Actions -> "Действия"
+                    },
+                    badge = when (item) {
+                        RoomSettingsTab.Members -> membersCount.takeIf { it > 0 }?.toString()
+                        RoomSettingsTab.Requests -> requestsCount.takeIf { it > 0 }?.toString()
+                        else -> null
+                    },
+                    selected = selected == item,
+                    onClick = { onSelected(item) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TabPill(
+    title: String,
+    badge: String?,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val container = if (selected) {
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+    } else {
+        MaterialTheme.colorScheme.surface.copy(alpha = 0.58f)
+    }
+
+    val textColor = if (selected) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(container)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            text = title,
+            color = textColor,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = 1,
+        )
+
+        if (!badge.isNullOrBlank()) {
+            Spacer(modifier = Modifier.width(5.dp))
+            Text(
+                text = badge,
+                color = MaterialTheme.colorScheme.onPrimary,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary)
+                    .padding(horizontal = 6.dp, vertical = 1.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun GeneralSettingsCard(
+    viewModel: RoomSettingsViewModel,
+    roomId: Long,
+) {
+    ModernCard {
+        SectionTitle(
+            title = "Основное",
+            subtitle = "Название, описание и ссылка комнаты",
+        )
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        SettingsTextField(
+            value = viewModel.editName,
+            onValueChange = { viewModel.editName = it },
+            label = "Название",
+            singleLine = true,
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        SettingsTextField(
+            value = viewModel.editDescription,
+            onValueChange = { viewModel.editDescription = it },
+            label = "Описание",
+            maxLines = 3,
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        SettingsTextField(
+            value = viewModel.editSlug,
+            onValueChange = { viewModel.editSlug = it },
+            label = "Короткая ссылка",
+            singleLine = true,
+        )
+
+        Spacer(modifier = Modifier.height(18.dp))
+
+        SectionTitle(
+            title = "Доступ",
+            subtitle = "Кто сможет найти и открыть комнату",
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            SegmentedButton(
+                selected = viewModel.editAccessType == "public",
+                onClick = { viewModel.editAccessType = "public" },
+                shape = SegmentedButtonDefaults.itemShape(0, 2),
+            ) {
+                Text("Публичная")
+            }
+            SegmentedButton(
+                selected = viewModel.editAccessType == "private",
+                onClick = { viewModel.editAccessType = "private" },
+                shape = SegmentedButtonDefaults.itemShape(1, 2),
+            ) {
+                Text("Закрытая")
+            }
+        }
+
+        if (!viewModel.error.isNullOrBlank() && !viewModel.saveSuccess) {
+            Spacer(modifier = Modifier.height(12.dp))
+            StatusText(text = viewModel.error ?: "", isError = true)
+        }
+
+        if (viewModel.saveSuccess) {
+            Spacer(modifier = Modifier.height(12.dp))
+            StatusText(text = "Сохранено", isError = false)
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(
+            onClick = { viewModel.saveSettings(roomId) },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            enabled = !viewModel.isSaving
+        ) {
+            if (viewModel.isSaving) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    strokeWidth = 2.dp
+                )
+            } else {
+                Text("Сохранить изменения")
+            }
+        }
+    }
+}
+
+@Composable
+private fun MembersCard(
+    roomId: Long,
+    detail: RoomDetailResponse,
+    viewModel: RoomSettingsViewModel,
+) {
+    ModernCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            SectionTitle(
+                title = "Участники",
+                subtitle = "${detail.members.size} человек в комнате",
+                modifier = Modifier.weight(1f),
+            )
+
+            if (detail.canInvite) {
+                OutlinedButton(
+                    onClick = {
+                        viewModel.loadInviteCandidates(roomId)
+                        viewModel.showInviteSheet = true
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                ) {
+                    Text("Пригласить")
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        if (detail.members.isEmpty()) {
+            EmptyInsideCard("Участников пока нет")
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                detail.members.forEach { member ->
+                    MemberRow(
+                        member = member,
+                        canManageOthers = detail.canOwn || (detail.canManage && detail.createdBy != member.id),
+                        isRemoving = viewModel.removingMemberId == member.id,
+                        isUpdating = viewModel.updatingMemberId == member.id,
+                        onRemove = { viewModel.removeMember(roomId, member.id) },
+                        onToggleRole = { viewModel.toggleMemberRole(roomId, member) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RequestsCard(
+    roomId: Long,
+    viewModel: RoomSettingsViewModel,
+) {
+    ModernCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            SectionTitle(
+                title = "Заявки",
+                subtitle = "Запросы на вступление в комнату",
+                modifier = Modifier.weight(1f),
+            )
+
+            OutlinedButton(
+                onClick = { viewModel.loadJoinRequests(roomId) },
+                shape = RoundedCornerShape(16.dp),
+            ) {
+                if (viewModel.isLoadingRequests) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    Text("Обновить")
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        if (viewModel.joinRequests.isEmpty()) {
+            EmptyInsideCard("Активных заявок нет")
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                viewModel.joinRequests.forEach { request ->
+                    JoinRequestRow(
+                        request = request,
+                        onApprove = { viewModel.approveRequest(roomId, request.userId) },
+                        onDecline = { viewModel.declineRequest(roomId, request.userId) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActionsCard(
+    canOwn: Boolean,
+    isLeaving: Boolean,
+    isDeleting: Boolean,
+    onLeave: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    ModernCard(
+        containerAlpha = 0.30f,
+    ) {
+        SectionTitle(
+            title = "Опасная зона",
+            subtitle = "Действия, которые могут ограничить доступ к комнате",
+        )
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        OutlinedButton(
+            onClick = onLeave,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            enabled = !isLeaving,
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+        ) {
+            if (isLeaving) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            } else {
+                Text("Покинуть комнату")
+            }
+        }
+
+        if (canOwn) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Button(
+                onClick = onDelete,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                enabled = !isDeleting
+            ) {
+                if (isDeleting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = MaterialTheme.colorScheme.onError,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Text("Удалить комнату")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun MemberRow(
     member: RoomMemberDto,
     canManageOthers: Boolean,
@@ -380,49 +738,98 @@ private fun MemberRow(
     onToggleRole: () -> Unit,
 ) {
     Card(
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f)
+        ),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            DialogAvatar(member.displayName, avatarUrl = member.avatarUrl)
-            Spacer(modifier = Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                DialogAvatar(member.displayName, avatarUrl = member.avatarUrl, modifier = Modifier.size(44.dp))
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(member.displayName, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            text = member.displayName,
+                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                         Spacer(modifier = Modifier.width(6.dp))
-                        if (member.online) OnlineDot()
+                        if (member.online) {
+                            OnlineDot()
+                        }
                     }
-                Text("@${member.username}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-            }
-            if (member.role == "admin") {
-                Text("Админ", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
-                Spacer(modifier = Modifier.width(6.dp))
-            }
-            if (canManageOthers) {
-                if (isUpdating) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                } else {
+
                     Text(
-                        text = if (member.role == "admin") "Снять" else "Назначить",
-                        color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.clickable(onClick = onToggleRole)
+                        text = "@${member.username}",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Spacer(modifier = Modifier.width(6.dp))
-                if (isRemoving) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                } else {
-                    Text(
-                        text = "Исключить",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.clickable(onClick = onRemove)
-                    )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                InfoPill(
+                    text = when (member.role) {
+                        "owner" -> "Владелец"
+                        "admin" -> "Админ"
+                        else -> "Участник"
+                    },
+                    selected = member.role == "owner" || member.role == "admin",
+                )
+
+                if (member.isMuted) {
+                    InfoPill(text = "Mute", danger = true)
+                }
+
+                if (!member.canPostMedia) {
+                    InfoPill(text = "Без медиа", danger = true)
+                }
+            }
+
+            if (canManageOthers) {
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = onToggleRole,
+                        enabled = !isUpdating,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.weight(1f),
+                        contentPadding = ButtonDefaults.TextButtonContentPadding,
+                    ) {
+                        if (isUpdating) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text(if (member.role == "admin") "Снять админа" else "Сделать админом")
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = onRemove,
+                        enabled = !isRemoving,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        contentPadding = ButtonDefaults.TextButtonContentPadding,
+                    ) {
+                        if (isRemoving) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text("Исключить")
+                        }
+                    }
                 }
             }
         }
@@ -436,31 +843,58 @@ private fun JoinRequestRow(
     onDecline: () -> Unit,
 ) {
     Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f)
+        ),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            DialogAvatar(request.displayName, avatarUrl = request.avatarUrl, modifier = Modifier.size(36.dp))
-            Spacer(modifier = Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(request.displayName, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
-                Text("@${request.username}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                DialogAvatar(request.displayName, avatarUrl = request.avatarUrl, modifier = Modifier.size(44.dp))
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = request.displayName,
+                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "@${request.username}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
-            Button(
-                onClick = onApprove,
-                shape = RoundedCornerShape(12.dp),
-                contentPadding = ButtonDefaults.TextButtonContentPadding
-            ) { Text("Принять") }
-            Spacer(modifier = Modifier.width(4.dp))
-            OutlinedButton(
-                onClick = onDecline,
-                shape = RoundedCornerShape(12.dp),
-                contentPadding = ButtonDefaults.TextButtonContentPadding
-            ) { Text("Отклонить") }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onApprove,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f),
+                    contentPadding = ButtonDefaults.TextButtonContentPadding,
+                ) {
+                    Text("Принять")
+                }
+
+                OutlinedButton(
+                    onClick = onDecline,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f),
+                    contentPadding = ButtonDefaults.TextButtonContentPadding,
+                ) {
+                    Text("Отклонить")
+                }
+            }
         }
     }
 }
@@ -479,30 +913,196 @@ private fun InviteCandidatesDialog(
             if (candidates.isEmpty()) {
                 Text("Нет доступных пользователей для приглашения")
             } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     items(candidates, key = { it.id }) { user ->
                         Card(
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)),
+                            shape = RoundedCornerShape(18.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f)
+                            ),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
-                                modifier = Modifier.fillMaxWidth().clickable(enabled = !isInviting) { onInvite(user.id) }.padding(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = !isInviting) { onInvite(user.id) }
+                                    .padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                DialogAvatar(user.displayName, avatarUrl = user.avatarUrl)
-                                Spacer(modifier = Modifier.width(10.dp))
+                                DialogAvatar(user.displayName, avatarUrl = user.avatarUrl, modifier = Modifier.size(42.dp))
+                                Spacer(modifier = Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(user.displayName, fontWeight = FontWeight.Medium)
-                                    Text("@${user.username}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                                    Text(user.displayName, fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "@${user.username}",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
                                 }
-                                if (isInviting) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                if (isInviting) {
+                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                } else {
+                                    Text(
+                                        text = "Пригласить",
+                                        color = MaterialTheme.colorScheme.primary,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
         },
-        confirmButton = { OutlinedButton(onClick = onDismiss) { Text("Готово") } }
+        confirmButton = {
+            OutlinedButton(onClick = onDismiss) {
+                Text("Готово")
+            }
+        }
     )
+}
+
+@Composable
+private fun ModernCard(
+    modifier: Modifier = Modifier,
+    containerAlpha: Float = 0.78f,
+    content: @Composable () -> Unit,
+) {
+    Card(
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = containerAlpha)
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp)
+        ) {
+            content()
+        }
+    }
+}
+
+@Composable
+private fun SectionTitle(
+    title: String,
+    subtitle: String,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = subtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun SettingsTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    singleLine: Boolean = false,
+    maxLines: Int = 1,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text(label) },
+        singleLine = singleLine,
+        maxLines = maxLines,
+        shape = RoundedCornerShape(18.dp),
+    )
+}
+
+@Composable
+private fun InfoPill(
+    text: String,
+    selected: Boolean = false,
+    danger: Boolean = false,
+) {
+    val containerColor = when {
+        danger -> MaterialTheme.colorScheme.error.copy(alpha = 0.12f)
+        selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)
+    }
+
+    val textColor = when {
+        danger -> MaterialTheme.colorScheme.error
+        selected -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Text(
+        text = text,
+        color = textColor,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(containerColor)
+            .padding(horizontal = 9.dp, vertical = 5.dp),
+        maxLines = 1,
+    )
+}
+
+@Composable
+private fun StatusText(text: String, isError: Boolean) {
+    Text(
+        text = text,
+        color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(
+                if (isError) MaterialTheme.colorScheme.error.copy(alpha = 0.10f)
+                else MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+            )
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    )
+}
+
+@Composable
+private fun EmptyModernCard(text: String) {
+    ModernCard {
+        EmptyInsideCard(text)
+    }
+}
+
+@Composable
+private fun EmptyInsideCard(text: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f))
+            .padding(18.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+            textAlign = TextAlign.Center,
+        )
+    }
 }

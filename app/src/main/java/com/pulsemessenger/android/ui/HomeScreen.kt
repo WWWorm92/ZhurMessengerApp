@@ -172,14 +172,6 @@ fun HomeScreen(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    DrawerGlassItem(
-                        icon = Icons.Filled.Search,
-                        title = "Поиск сообщений",
-                        onClick = {
-                            closeDrawer()
-                            onOpenMessageSearch()
-                        }
-                    )
 
                     DrawerGlassItem(
                         icon = Icons.Filled.Settings,

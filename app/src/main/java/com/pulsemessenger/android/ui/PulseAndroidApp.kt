@@ -210,6 +210,15 @@ fun PulseAndroidApp() {
     val searchViewModel: SearchViewModel = viewModel(factory = com.pulsemessenger.android.feature.search.SearchViewModelFactory(searchRepository))
     var selectedDialog by remember { mutableStateOf<DialogUserDto?>(null) }
     var selectedRoom by remember { mutableStateOf<RoomDto?>(null) }
+    LaunchedEffect(roomsViewModel.rooms, selectedRoom?.id) {
+        val activeRoom = selectedRoom ?: return@LaunchedEffect
+        val updatedRoom = roomsViewModel.rooms.firstOrNull { it.id == activeRoom.id }
+
+        if (updatedRoom != null && updatedRoom != activeRoom) {
+            selectedRoom = updatedRoom
+            roomChatViewModel.openRoom(updatedRoom)
+        }
+    }
     var invitationsOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     var profileOpen by remember { mutableStateOf(false) }
@@ -685,7 +694,10 @@ fun PulseAndroidApp() {
                             RoomSettingsScreen(
                                 roomId = room.id,
                                 repository = roomSettingsRepository,
-                                onBack = { roomSettingsOpen = false },
+                                onBack = {
+                                    roomSettingsOpen = false
+                                    roomsViewModel.load()
+                                },
                                 onRoomDeleted = {
                                     roomSettingsOpen = false
                                     realtimeSocketManager.emitTypingUpdate("room", room.id, false)

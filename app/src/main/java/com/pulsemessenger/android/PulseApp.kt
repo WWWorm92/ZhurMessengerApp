@@ -24,7 +24,7 @@ class PulseApp : Application() {
         instance = this
         sessionStore = SessionStore(this)
         networkProvider = NetworkProvider(this, sessionStore)
-        pushManager = PushManager()
+        pushManager = PushManager(this)
         createNotificationChannel()
         FirebaseApp.initializeApp(this)
     }

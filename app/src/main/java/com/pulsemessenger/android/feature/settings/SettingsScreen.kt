@@ -76,7 +76,17 @@ import com.pulsemessenger.android.core.session.ImageQuality
 import com.pulsemessenger.android.core.session.ThemeMode
 import com.pulsemessenger.android.ui.DialogAvatar
 import com.pulsemessenger.android.ui.formatLastSeen
-
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.app.NotificationManagerCompat
+import com.google.firebase.messaging.FirebaseMessaging
+import com.pulsemessenger.android.PulseApp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.heightIn
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -179,18 +189,14 @@ fun SettingsScreen(
                     SectionHeader("Устройства")
                 }
 
-                if (viewModel.devices.isEmpty()) {
-                    item {
-                        EmptyCard("Нет активных устройств")
-                    }
-                } else {
-                    items(viewModel.devices, key = { it.id }) { device ->
-                        DeviceCard(
-                            device = device,
-                            isActing = viewModel.actingDeviceId == device.id,
-                            onRevoke = { viewModel.revokeDevice(device.id, onLogoutCurrent) }
-                        )
-                    }
+                item {
+                    DevicesBox(
+                        devices = viewModel.devices,
+                        actingDeviceId = viewModel.actingDeviceId,
+                        onRevoke = { deviceId ->
+                            viewModel.revokeDevice(deviceId, onLogoutCurrent)
+                        }
+                    )
                 }
 
                 item {
@@ -410,73 +416,67 @@ private fun SettingsRow(
 @Composable
 private fun NotificationCard(viewModel: SettingsViewModel) {
     val status = viewModel.notificationStatus
+    val context = LocalContext.current
+    val app = context.applicationContext as PulseApp
+    val scope = rememberCoroutineScope()
+
+    var notificationsEnabled by remember {
+        mutableStateOf(app.pushManager.isEnabled())
+    }
 
     Card(
         shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f)),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f)
+        ),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    if (status?.pushEnabled == true) Icons.Filled.NotificationsActive else Icons.Filled.NotificationsOff,
-                    contentDescription = null,
-                    tint = if (status?.pushEnabled == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(22.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Push-уведомления", fontWeight = FontWeight.SemiBold)
-                    Text(
-                        when {
-                            status == null -> "Загрузка..."
-                            status.pushEnabled && status.subscriptions > 0 -> "Включены (${status.subscriptions} подписок)"
-                            status.pushEnabled -> "Нет активных подписок"
-                            else -> "Отключены на сервере"
-                        },
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-            }
+            SwitchRow(
+                icon = if (notificationsEnabled) {
+                    Icons.Filled.NotificationsActive
+                } else {
+                    Icons.Filled.NotificationsOff
+                },
+                title = "Push-уведомления",
+                subtitle = when {
+                    !notificationsEnabled -> "Выключены на этом устройстве"
+                    status == null -> "Загрузка..."
+                    status.pushEnabled && status.subscriptions > 0 -> "Включены"
+                    status.pushEnabled -> "Включены, регистрация устройства..."
+                    else -> "Отключены на сервере"
+                },
+                checked = notificationsEnabled,
+                onCheckedChange = { enabled ->
+                    notificationsEnabled = enabled
+                    app.pushManager.setEnabled(enabled)
 
-            Spacer(modifier = Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = { viewModel.testNotification() },
-                    enabled = !viewModel.isTestingNotification && status?.subscriptions != null && status.subscriptions > 0,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    if (viewModel.isTestingNotification) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    if (enabled) {
+                        FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+                            app.pushManager.onTokenRefreshed(
+                                token,
+                                app.networkProvider,
+                                app.sessionStore
+                            )
+                        }
                     } else {
-                        Text("Тест")
-                    }
-                }
-                OutlinedButton(
-                    onClick = { viewModel.unsubscribeAll() },
-                    enabled = !viewModel.isUnsubscribing && status?.subscriptions != null && status.subscriptions > 0,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    if (viewModel.isUnsubscribing) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    } else {
-                        Text("Отписаться")
-                    }
-                }
-            }
+                        scope.launch {
+                            val token = app.sessionStore.currentToken().trim()
 
-            if (!viewModel.testResult.isNullOrBlank()) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    viewModel.testResult ?: "",
-                    color = MaterialTheme.colorScheme.primary,
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
+                            if (token.isNotBlank()) {
+                                withContext(Dispatchers.IO) {
+                                    runCatching {
+                                        app.networkProvider.api.unsubscribeAll("Bearer $token")
+                                    }
+                                }
+                            }
+
+                            NotificationManagerCompat.from(context).cancelAll()
+                            viewModel.load()
+                        }
+                    }
+                },
+            )
 
             Spacer(modifier = Modifier.height(12.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
@@ -489,6 +489,7 @@ private fun NotificationCard(viewModel: SettingsViewModel) {
                 checked = viewModel.notifSound,
                 onCheckedChange = { viewModel.updateNotifSound(it) },
             )
+
             Spacer(modifier = Modifier.height(12.dp))
             SwitchRow(
                 icon = Icons.Filled.Vibration,
@@ -652,6 +653,50 @@ private fun CurrentBadge() {
             .padding(horizontal = 8.dp, vertical = 3.dp)
     ) {
         Text("текущее", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+    }
+}
+@Composable
+private fun DevicesBox(
+    devices: List<com.pulsemessenger.android.core.network.DeviceDto>,
+    actingDeviceId: Long?,
+    onRevoke: (Long) -> Unit,
+) {
+    Card(
+        shape = RoundedCornerShape(24.dp),
+        border = BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)
+        ),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        if (devices.isEmpty()) {
+            Text(
+                text = "Нет активных устройств",
+                modifier = Modifier.padding(16.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            return@Card
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 360.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            devices.forEach { device ->
+                DeviceCard(
+                    device = device,
+                    isActing = actingDeviceId == device.id,
+                    onRevoke = { onRevoke(device.id) }
+                )
+            }
+        }
     }
 }
 

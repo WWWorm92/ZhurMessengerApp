@@ -117,6 +117,8 @@ import com.pulsemessenger.android.ui.ChatComposerTextField
 import com.pulsemessenger.android.ui.ReplyContextBar
 import com.pulsemessenger.android.ui.MessageMetaRow
 import com.pulsemessenger.android.core.notification.PulseNotificationStore
+import com.pulsemessenger.android.ui.AttachmentPickerSheetContent
+import com.pulsemessenger.android.ui.createCameraImageUri
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RoomChatScreen(
@@ -160,6 +162,19 @@ fun RoomChatScreen(
         uris.forEach { uri ->
             onFileSelected(uri)
         }
+    }
+
+    var cameraImageUri by remember { mutableStateOf<Uri?>(null) }
+    val cameraLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { success ->
+        val uri = cameraImageUri
+
+        if (success && uri != null) {
+            onImageSelected(uri)
+        }
+
+        cameraImageUri = null
     }
 
     LaunchedEffect(viewModel.shouldScrollToBottom, viewModel.messages.size, viewModel.isLoading) {
@@ -284,11 +299,22 @@ fun RoomChatScreen(
                             },
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = room.name.trim().take(1).uppercase().ifBlank { "#" },
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold
-                        )
+                        if (room.avatarUrl.isNotBlank()) {
+                            AsyncImage(
+                                model = resolveBackendMediaUrl(room.avatarUrl),
+                                contentDescription = "Аватар комнаты",
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(CircleShape),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Text(
+                                text = room.name.trim().take(1).uppercase().ifBlank { "#" },
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.width(10.dp))
@@ -649,9 +675,19 @@ fun RoomChatScreen(
                 onDismissRequest = { attachMenuExpanded = false }
             ) {
                 AttachmentPickerSheetContent(
-                    onImageClick = {
+                    onCameraClick = {
+                        val uri = createCameraImageUri(context)
+                        cameraImageUri = uri
+                        attachMenuExpanded = false
+                        cameraLauncher.launch(uri)
+                    },
+                    onGalleryClick = {
                         attachMenuExpanded = false
                         imagePicker.launch("image/*")
+                    },
+                    onRecentImageClick = { uri ->
+                        attachMenuExpanded = false
+                        onImageSelected(uri)
                     },
                     onFileClick = {
                         attachMenuExpanded = false
@@ -685,95 +721,6 @@ fun RoomChatScreen(
                 },
                 onOpenFile = { url -> uriHandler.openUri(url) },
             )
-        }
-    }
-}
-
-@Composable
-private fun AttachmentPickerSheetContent(
-    onImageClick: () -> Unit,
-    onFileClick: () -> Unit,
-    onPollClick: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 18.dp, end = 18.dp, bottom = 28.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Text(
-            text = "Прикрепить",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold
-        )
-
-        AttachmentOption(
-            icon = "🖼️",
-            title = "Фото",
-            subtitle = "Выбрать одно или несколько фото",
-            onClick = onImageClick
-        )
-
-        AttachmentOption(
-            icon = "📎",
-            title = "Файл",
-            subtitle = "Документ, архив, видео или другой файл",
-            onClick = onFileClick
-        )
-
-        AttachmentOption(
-            icon = "📊",
-            title = "Опрос",
-            subtitle = "Создать опрос в комнате",
-            onClick = onPollClick
-        )
-    }
-}
-
-@Composable
-private fun AttachmentOption(
-    icon: String,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit,
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
-        )
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(icon, fontSize = 22.sp)
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
         }
     }
 }
