@@ -58,6 +58,9 @@ import com.pulsemessenger.android.core.network.RoomMemberDto
 import com.pulsemessenger.android.ui.DialogAvatar
 import com.pulsemessenger.android.ui.OnlineDot
 import com.pulsemessenger.android.ui.resolveBackendMediaUrl
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.widthIn
 
 private enum class RoomSettingsTab {
     General,
@@ -393,17 +396,20 @@ private fun RoomSettingsTabBar(
     }
 
     Card(
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f)
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.64f)
         ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             tabs.forEach { item ->
                 TabPill(
@@ -420,7 +426,6 @@ private fun RoomSettingsTabBar(
                     },
                     selected = selected == item,
                     onClick = { onSelected(item) },
-                    modifier = Modifier.weight(1f),
                 )
             }
         }
@@ -436,9 +441,9 @@ private fun TabPill(
     modifier: Modifier = Modifier,
 ) {
     val container = if (selected) {
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
     } else {
-        MaterialTheme.colorScheme.surface.copy(alpha = 0.58f)
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f)
     }
 
     val textColor = if (selected) {
@@ -449,31 +454,36 @@ private fun TabPill(
 
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(18.dp))
+            .widthIn(min = 94.dp)
+            .clip(RoundedCornerShape(999.dp))
             .background(container)
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 10.dp),
+            .padding(horizontal = 16.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
         Text(
             text = title,
             color = textColor,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
             maxLines = 1,
+            softWrap = false,
         )
 
         if (!badge.isNullOrBlank()) {
-            Spacer(modifier = Modifier.width(5.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+
             Text(
                 text = badge,
                 color = MaterialTheme.colorScheme.onPrimary,
                 style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
                 modifier = Modifier
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.primary)
-                    .padding(horizontal = 6.dp, vertical = 1.dp)
+                    .padding(horizontal = 7.dp, vertical = 2.dp)
             )
         }
     }

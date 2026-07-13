@@ -167,7 +167,9 @@ fun DmChatScreen(
         }
     }
 
+    var galleryPermissionReloadKey by remember { mutableStateOf(0) }
     var cameraImageUri by remember { mutableStateOf<Uri?>(null) }
+
     val cameraLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicture()
     ) { success ->
@@ -175,6 +177,7 @@ fun DmChatScreen(
 
         if (success && uri != null) {
             onImageSelected(uri)
+            galleryPermissionReloadKey++
         }
 
         cameraImageUri = null
@@ -672,6 +675,7 @@ fun DmChatScreen(
                 onDismissRequest = { attachMenuExpanded = false }
             ) {
                 AttachmentPickerSheetContent(
+                    reloadKey = galleryPermissionReloadKey,
                     onCameraClick = {
                         val uri = createCameraImageUri(context)
                         cameraImageUri = uri
@@ -682,9 +686,11 @@ fun DmChatScreen(
                         attachMenuExpanded = false
                         imagePicker.launch("image/*")
                     },
-                    onRecentImageClick = { uri ->
+                    onRecentImagesSelected = { uris ->
                         attachMenuExpanded = false
-                        onImageSelected(uri)
+                        uris.forEach { uri ->
+                            onImageSelected(uri)
+                        }
                     },
                     onFileClick = {
                         attachMenuExpanded = false

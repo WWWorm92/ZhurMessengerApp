@@ -29,9 +29,9 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -56,14 +56,17 @@ import kotlinx.coroutines.withContext
 
 @Composable
 fun AttachmentPickerSheetContent(
+    reloadKey: Int,
     onCameraClick: () -> Unit,
     onGalleryClick: () -> Unit,
-    onRecentImageClick: (Uri) -> Unit,
+    onRecentImagesSelected: (List<Uri>) -> Unit,
     onFileClick: () -> Unit,
     onPollClick: () -> Unit,
 ) {
     val context = LocalContext.current
-    var reloadKey by remember { mutableStateOf(0) }
+    var internalReloadKey by remember { mutableStateOf(0) }
+    var selectedImages by remember { mutableStateOf<Set<Uri>>(emptySet()) }
+
     val permission = imageReadPermission()
     val hasPermission = hasImageReadPermission(context)
 
@@ -71,14 +74,15 @@ fun AttachmentPickerSheetContent(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            reloadKey++
+            internalReloadKey++
         }
     }
 
     val recentImages by produceState(
         initialValue = emptyList<Uri>(),
         key1 = reloadKey,
-        key2 = hasPermission,
+        key2 = internalReloadKey,
+        key3 = hasPermission,
     ) {
         value = if (hasPermission) {
             loadRecentImageUris(context)
@@ -107,13 +111,21 @@ fun AttachmentPickerSheetContent(
                 }
 
                 items(recentImages) { uri ->
+                    val selected = selectedImages.contains(uri)
+
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .aspectRatio(1f)
                             .clip(RoundedCornerShape(4.dp))
                             .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .clickable { onRecentImageClick(uri) }
+                            .clickable {
+                                selectedImages = if (selected) {
+                                    selectedImages - uri
+                                } else {
+                                    selectedImages + uri
+                                }
+                            }
                     ) {
                         AsyncImage(
                             model = uri,
@@ -121,6 +133,30 @@ fun AttachmentPickerSheetContent(
                             modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.Crop
                         )
+
+                        if (selected) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.28f))
+                            )
+
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(8.dp)
+                                    .size(26.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "✓",
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -171,6 +207,19 @@ fun AttachmentPickerSheetContent(
             }
         }
 
+        if (selectedImages.isNotEmpty()) {
+            Button(
+                onClick = {
+                    onRecentImagesSelected(selectedImages.toList())
+                    selectedImages = emptySet()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(22.dp)
+            ) {
+                Text("Добавить ${selectedImages.size}")
+            }
+        }
+
         AttachmentBottomDock(
             onGalleryClick = onGalleryClick,
             onFileClick = onFileClick,
@@ -192,9 +241,7 @@ private fun CameraTile(onClick: () -> Unit) {
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text("📷", fontSize = 30.sp)
-
             Spacer(modifier = Modifier.height(6.dp))
-
             Text(
                 text = "Камера",
                 style = MaterialTheme.typography.labelMedium,

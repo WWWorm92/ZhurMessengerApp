@@ -119,6 +119,7 @@ import com.pulsemessenger.android.ui.MessageMetaRow
 import com.pulsemessenger.android.core.notification.PulseNotificationStore
 import com.pulsemessenger.android.ui.AttachmentPickerSheetContent
 import com.pulsemessenger.android.ui.createCameraImageUri
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RoomChatScreen(
@@ -149,6 +150,21 @@ fun RoomChatScreen(
     val uriHandler = LocalUriHandler.current
     val haptic = LocalHapticFeedback.current
     val context = LocalContext.current
+    var galleryPermissionReloadKey by remember { mutableStateOf(0) }
+    var cameraImageUri by remember { mutableStateOf<Uri?>(null) }
+
+    val cameraLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { success ->
+        val uri = cameraImageUri
+
+        if (success && uri != null) {
+            onImageSelected(uri)
+            galleryPermissionReloadKey++
+        }
+
+        cameraImageUri = null
+    }
     LaunchedEffect(context, room.id) {
         PulseNotificationStore.clear(context, "room:${room.id}")
     }
@@ -164,18 +180,6 @@ fun RoomChatScreen(
         }
     }
 
-    var cameraImageUri by remember { mutableStateOf<Uri?>(null) }
-    val cameraLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.TakePicture()
-    ) { success ->
-        val uri = cameraImageUri
-
-        if (success && uri != null) {
-            onImageSelected(uri)
-        }
-
-        cameraImageUri = null
-    }
 
     LaunchedEffect(viewModel.shouldScrollToBottom, viewModel.messages.size, viewModel.isLoading) {
         if (
@@ -675,6 +679,7 @@ fun RoomChatScreen(
                 onDismissRequest = { attachMenuExpanded = false }
             ) {
                 AttachmentPickerSheetContent(
+                    reloadKey = galleryPermissionReloadKey,
                     onCameraClick = {
                         val uri = createCameraImageUri(context)
                         cameraImageUri = uri
@@ -685,9 +690,11 @@ fun RoomChatScreen(
                         attachMenuExpanded = false
                         imagePicker.launch("image/*")
                     },
-                    onRecentImageClick = { uri ->
+                    onRecentImagesSelected = { uris ->
                         attachMenuExpanded = false
-                        onImageSelected(uri)
+                        uris.forEach { uri ->
+                            onImageSelected(uri)
+                        }
                     },
                     onFileClick = {
                         attachMenuExpanded = false
