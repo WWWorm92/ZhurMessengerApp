@@ -22,6 +22,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.util.UUID
 
 class DmChatViewModel(
     private val repository: DmChatRepository,
@@ -264,6 +265,14 @@ class DmChatViewModel(
             val replyingTo = replyToMessageId
             val toSend = attachments
 
+            val imageAttachments = toSend.filter { it.kind == PendingAttachmentKind.Image }
+
+            val mediaGroupId = if (imageAttachments.size > 1 && imageAttachments.size == toSend.size) {
+                UUID.randomUUID().toString()
+            } else {
+                null
+            }
+
             error = null
             isUploadingImage = true
 
@@ -278,6 +287,7 @@ class DmChatViewModel(
                         attachment = attachment,
                         caption = caption,
                         replyToMessageId = replyId,
+                        mediaGroupId = mediaGroupId,
                     )
 
                     result
@@ -486,6 +496,7 @@ class DmChatViewModel(
         attachment: PendingAttachment,
         caption: String,
         replyToMessageId: Long?,
+        mediaGroupId: String?,
     ): Result<DmMessageDto> {
         return when (attachment.kind) {
             PendingAttachmentKind.Image -> {
@@ -495,7 +506,11 @@ class DmChatViewModel(
                             peerUserId = peerUserId,
                             content = caption,
                             imageUrl = imageUrl,
+                            fileUrl = null,
+                            fileName = null,
+                            fileSize = null,
                             replyToMessageId = replyToMessageId,
+                            mediaGroupId = mediaGroupId,
                         )
                     },
                     onFailure = { error ->
@@ -657,6 +672,7 @@ class DmChatViewModel(
             fileUrl = optString("fileUrl"),
             fileName = optString("fileName"),
             fileSize = if (has("fileSize") && !isNull("fileSize")) optLong("fileSize") else null,
+            mediaGroupId = optString("mediaGroupId"),
             forwardedFromName = optString("forwardedFromName"),
             replyToMessageId = if (has("replyToMessageId") && !isNull("replyToMessageId")) optLong("replyToMessageId") else null,
             editedAt = optNullableString("editedAt"),

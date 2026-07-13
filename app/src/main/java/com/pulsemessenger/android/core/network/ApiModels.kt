@@ -86,6 +86,7 @@ data class DmMessageDto(
     val fileUrl: String = "",
     val fileName: String = "",
     val fileSize: Long? = null,
+    val mediaGroupId: String = "",
     val forwardedFromName: String = "",
     val replyToMessageId: Long? = null,
     val editedAt: String? = null,
@@ -127,6 +128,7 @@ data class SendMessageRequest(
     val fileUrl: String? = null,
     val fileName: String? = null,
     val fileSize: Long? = null,
+    val mediaGroupId: String? = null,
     val poll: PollCreationRequest? = null,
     val forwardedFromName: String? = null,
 )
@@ -187,6 +189,7 @@ data class RoomMessageDto(
     val fileUrl: String = "",
     val fileName: String = "",
     val fileSize: Long? = null,
+    val mediaGroupId: String = "",
     val forwardedFromName: String = "",
     val replyToMessageId: Long? = null,
     val editedAt: String? = null,

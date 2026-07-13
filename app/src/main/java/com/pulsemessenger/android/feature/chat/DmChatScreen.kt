@@ -119,7 +119,6 @@ import androidx.compose.material.icons.filled.Search
 import com.pulsemessenger.android.ui.ChatComposerTextField
 import com.pulsemessenger.android.ui.ReplyContextBar
 import com.pulsemessenger.android.ui.MessageMetaRow
-import androidx.compose.ui.platform.LocalContext
 import com.pulsemessenger.android.core.notification.PulseNotificationStore
 import com.pulsemessenger.android.ui.AttachmentPickerSheetContent
 import com.pulsemessenger.android.ui.createCameraImageUri
@@ -153,6 +152,9 @@ fun DmChatScreen(
     val uriHandler = LocalUriHandler.current
     val haptic = LocalHapticFeedback.current
     val context = LocalContext.current
+    val messageListItems = remember(viewModel.messages) {
+        buildDmMessageListItems(viewModel.messages)
+    }
     LaunchedEffect(context, peer.id) {
         PulseNotificationStore.clear(context, "dm:${peer.id}")
     }
@@ -187,9 +189,9 @@ fun DmChatScreen(
         if (
             viewModel.shouldScrollToBottom &&
             !viewModel.isLoading &&
-            viewModel.messages.isNotEmpty()
+            messageListItems.isNotEmpty()
         ) {
-            listState.animateScrollToItem(viewModel.messages.lastIndex)
+            listState.animateScrollToItem(messageListItems.lastIndex)
             viewModel.consumeScrollToBottom()
         }
     }
@@ -423,12 +425,19 @@ fun DmChatScreen(
                     }
                 }
                 itemsIndexed(
-                    items = viewModel.messages,
-                    key = { _, item -> item.id }
+                    items = messageListItems,
+                    key = { _, item ->
+                        if (item.albumMessages.size > 1) {
+                            "album-${item.message.mediaGroupId}-${item.message.id}"
+                        } else {
+                            "msg-${item.message.id}"
+                        }
+                    }
+                ) { index, item ->
 
-                ) { index, message ->
-
-                    val previousMessage = viewModel.messages.getOrNull(index - 1)
+                    val message = item.message
+                    val albumMessages = item.albumMessages
+                    val previousMessage = messageListItems.getOrNull(index - 1)?.message
 
                     val currentDay = formatDayLabel(message.createdAt)
                     val previousDay = formatDayLabel(previousMessage?.createdAt)
@@ -462,19 +471,19 @@ fun DmChatScreen(
                     Box(modifier = Modifier.animateItem()) {
                         DmMessageBubble(
                             message = message,
+                            albumMessages = albumMessages,
                             isMine = currentUserId != null && message.senderId == currentUserId,
                             isEditing = viewModel.editingMessageId == message.id,
-                            onOpenImage = {
+                            onOpenImage = { selectedImage ->
                                 val images = viewModel.messages
                                     .filter { it.deletedAt == null && it.imageUrl.isNotBlank() }
                                     .map { resolveBackendMediaUrl(it.imageUrl) as Any }
 
-                                val currentImage = resolveBackendMediaUrl(message.imageUrl)
-                                val currentIndex = images.indexOf(currentImage).takeIf { it >= 0 } ?: 0
+                                val currentIndex = images.indexOf(selectedImage).takeIf { it >= 0 } ?: 0
 
                                 fullscreenImageModels = images
                                 fullscreenImageStartIndex = currentIndex
-                                fullscreenImageModel = currentImage
+                                fullscreenImageModel = selectedImage
                             },
                             onOpenVideo = { url -> fullscreenVideoUrl = url },
                             onOpenFile = { fileUrl -> uriHandler.openUri(resolveBackendMediaUrl(fileUrl)) },
@@ -837,6 +846,7 @@ private fun PendingAttachmentsPreview(
 @Composable
 private fun DmMessageBubble(
     message: DmMessageDto,
+    albumMessages: List<DmMessageDto> = emptyList(),
     isMine: Boolean,
     isEditing: Boolean,
     onOpenImage: (Any) -> Unit,
@@ -968,7 +978,20 @@ private fun DmMessageBubble(
                         if (mainText.isNotBlank()) {
                             Text(mainText)
                         }
-                        if (message.imageUrl.isNotBlank() && message.deletedAt == null) {
+                        if (albumMessages.size > 1 && message.deletedAt == null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            MessageImageAlbum(
+                                imageUrls = albumMessages.map { it.imageUrl },
+                                enabled = !selectionMode,
+                                onOpen = { imageIndex ->
+                                    val imageUrl = albumMessages.getOrNull(imageIndex)?.imageUrl.orEmpty()
+                                    if (imageUrl.isNotBlank()) {
+                                        onOpenImage(resolveBackendMediaUrl(imageUrl))
+                                    }
+                                }
+                            )
+                        } else if (message.imageUrl.isNotBlank() && message.deletedAt == null) {
                             Spacer(modifier = Modifier.height(8.dp))
                             AsyncImage(
                                 model = resolveBackendMediaUrl(message.imageUrl),
@@ -1248,6 +1271,225 @@ private fun PollCard(
         if (canClose) {
             OutlinedButton(onClick = onClose) {
                 Text("Закрыть опрос")
+            }
+        }
+    }
+}
+
+private data class DmMessageListItem(
+    val message: DmMessageDto,
+    val albumMessages: List<DmMessageDto> = emptyList(),
+)
+
+private fun buildDmMessageListItems(messages: List<DmMessageDto>): List<DmMessageListItem> {
+    val result = mutableListOf<DmMessageListItem>()
+    var index = 0
+
+    while (index < messages.size) {
+        val message = messages[index]
+
+        if (message.isAlbumImage()) {
+            val album = mutableListOf<DmMessageDto>()
+            var cursor = index
+
+            while (cursor < messages.size) {
+                val candidate = messages[cursor]
+
+                if (candidate.isAlbumImage() && candidate.mediaGroupId == message.mediaGroupId) {
+                    album += candidate
+                    cursor++
+                } else {
+                    break
+                }
+            }
+
+            if (album.size > 1) {
+                result += DmMessageListItem(
+                    message = message,
+                    albumMessages = album,
+                )
+                index = cursor
+                continue
+            }
+        }
+
+        result += DmMessageListItem(message = message)
+        index++
+    }
+
+    return result
+}
+
+private fun DmMessageDto.isAlbumImage(): Boolean {
+    return deletedAt == null &&
+            imageUrl.isNotBlank() &&
+            mediaGroupId.isNotBlank()
+}
+
+@Composable
+private fun MessageImageAlbum(
+    imageUrls: List<String>,
+    enabled: Boolean,
+    onOpen: (Int) -> Unit,
+) {
+    val images = imageUrls.filter { it.isNotBlank() }
+
+    when (images.size) {
+        0 -> Unit
+
+        1 -> {
+            AlbumImageTile(
+                model = resolveBackendMediaUrl(images[0]),
+                enabled = enabled,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 120.dp, max = 280.dp),
+                onClick = { onOpen(0) }
+            )
+        }
+
+        2 -> {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(172.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                images.take(2).forEachIndexed { index, imageUrl ->
+                    AlbumImageTile(
+                        model = resolveBackendMediaUrl(imageUrl),
+                        enabled = enabled,
+                        modifier = Modifier.weight(1f),
+                        onClick = { onOpen(index) }
+                    )
+                }
+            }
+        }
+
+        3 -> {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(218.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                AlbumImageTile(
+                    model = resolveBackendMediaUrl(images[0]),
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f),
+                    onClick = { onOpen(0) }
+                )
+
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    AlbumImageTile(
+                        model = resolveBackendMediaUrl(images[1]),
+                        enabled = enabled,
+                        modifier = Modifier.weight(1f),
+                        onClick = { onOpen(1) }
+                    )
+
+                    AlbumImageTile(
+                        model = resolveBackendMediaUrl(images[2]),
+                        enabled = enabled,
+                        modifier = Modifier.weight(1f),
+                        onClick = { onOpen(2) }
+                    )
+                }
+            }
+        }
+
+        else -> {
+            val visible = images.take(4)
+            val extra = images.size - 4
+
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(124.dp),
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    AlbumImageTile(
+                        model = resolveBackendMediaUrl(visible[0]),
+                        enabled = enabled,
+                        modifier = Modifier.weight(1f),
+                        onClick = { onOpen(0) }
+                    )
+
+                    AlbumImageTile(
+                        model = resolveBackendMediaUrl(visible[1]),
+                        enabled = enabled,
+                        modifier = Modifier.weight(1f),
+                        onClick = { onOpen(1) }
+                    )
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(124.dp),
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    AlbumImageTile(
+                        model = resolveBackendMediaUrl(visible[2]),
+                        enabled = enabled,
+                        modifier = Modifier.weight(1f),
+                        onClick = { onOpen(2) }
+                    )
+
+                    AlbumImageTile(
+                        model = resolveBackendMediaUrl(visible[3]),
+                        enabled = enabled,
+                        modifier = Modifier.weight(1f),
+                        overlayText = if (extra > 0) "+$extra" else null,
+                        onClick = { onOpen(3) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AlbumImageTile(
+    model: Any,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    overlayText: String? = null,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(enabled = enabled) { onClick() }
+    ) {
+        AsyncImage(
+            model = model,
+            contentDescription = "Фото",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        if (!overlayText.isNullOrBlank()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.48f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = overlayText,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
     }

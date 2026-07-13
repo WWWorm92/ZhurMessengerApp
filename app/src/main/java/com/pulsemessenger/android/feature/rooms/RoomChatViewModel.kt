@@ -23,6 +23,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.util.UUID
 
 class RoomChatViewModel(
     private val repository: RoomChatRepository,
@@ -234,6 +235,13 @@ class RoomChatViewModel(
             val previousDraft = draft
             val replyingTo = replyToMessageId
             val toSend = attachments
+            val imageAttachments = toSend.filter { it.kind == PendingAttachmentKind.Image }
+
+            val mediaGroupId = if (imageAttachments.size > 1 && imageAttachments.size == toSend.size) {
+                UUID.randomUUID().toString()
+            } else {
+                null
+            }
 
             error = null
             isUploadingImage = true
@@ -249,6 +257,7 @@ class RoomChatViewModel(
                         attachment = attachment,
                         caption = caption,
                         replyToMessageId = replyId,
+                        mediaGroupId = mediaGroupId,
                     )
 
                     result
@@ -459,6 +468,7 @@ class RoomChatViewModel(
         attachment: PendingAttachment,
         caption: String,
         replyToMessageId: Long?,
+        mediaGroupId: String?,
     ): Result<RoomMessageDto> {
         return when (attachment.kind) {
             PendingAttachmentKind.Image -> {
@@ -468,7 +478,11 @@ class RoomChatViewModel(
                             roomId = roomId,
                             content = caption,
                             imageUrl = imageUrl,
+                            fileUrl = null,
+                            fileName = null,
+                            fileSize = null,
                             replyToMessageId = replyToMessageId,
+                            mediaGroupId = mediaGroupId,
                         )
                     },
                     onFailure = { error ->
@@ -627,6 +641,7 @@ class RoomChatViewModel(
             fileUrl = optString("fileUrl"),
             fileName = optString("fileName"),
             fileSize = if (has("fileSize") && !isNull("fileSize")) optLong("fileSize") else null,
+            mediaGroupId = optString("mediaGroupId"),
             forwardedFromName = optString("forwardedFromName"),
             replyToMessageId = if (has("replyToMessageId") && !isNull("replyToMessageId")) optLong("replyToMessageId") else null,
             editedAt = optNullableString("editedAt"),

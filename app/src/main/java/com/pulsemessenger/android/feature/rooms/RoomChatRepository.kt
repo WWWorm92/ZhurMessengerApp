@@ -85,6 +85,7 @@ class RoomChatRepository(
         replyToMessageId: Long? = null,
         poll: PollCreationRequest? = null,
         forwardedFromName: String? = null,
+        mediaGroupId: String? = null,
     ): Result<RoomMessageDto> {
         val token = sessionStore.currentToken().trim()
         if (token.isBlank()) {
@@ -93,7 +94,17 @@ class RoomChatRepository(
         val response = networkProvider.api.sendRoomMessage(
             authorization = "Bearer $token",
             roomId = roomId,
-            body = SendMessageRequest(content = content, imageUrl = imageUrl, fileUrl = fileUrl, fileName = fileName, fileSize = fileSize, replyToMessageId = replyToMessageId, poll = poll, forwardedFromName = forwardedFromName)
+            body = SendMessageRequest(
+                content = content,
+                imageUrl = imageUrl,
+                fileUrl = fileUrl,
+                fileName = fileName,
+                fileSize = fileSize,
+                mediaGroupId = mediaGroupId,
+                replyToMessageId = replyToMessageId,
+                poll = poll,
+                forwardedFromName = forwardedFromName
+            )
         )
         if (!response.isSuccessful) {
             val errorBody = response.errorBody()?.string().orEmpty()
