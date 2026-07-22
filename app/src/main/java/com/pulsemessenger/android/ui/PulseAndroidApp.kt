@@ -93,6 +93,12 @@ import com.pulsemessenger.android.feature.createroom.CreateRoomViewModelFactory
 import com.pulsemessenger.android.core.realtime.RealtimeSocketManager
 import com.pulsemessenger.android.core.call.CallIcePayload
 import com.pulsemessenger.android.core.call.WebRtcCallManager
+import com.pulsemessenger.android.core.call.CallActionBus
+import com.pulsemessenger.android.core.call.CallForegroundService
+import com.pulsemessenger.android.core.call.CallNotificationAction
+import com.pulsemessenger.android.core.call.CallNotificationHelper
+import com.pulsemessenger.android.core.notification.PulseNotificationStore
+import androidx.core.app.NotificationManagerCompat
 import com.pulsemessenger.android.PulseApp
 import androidx.compose.ui.platform.LocalContext
 import com.pulsemessenger.android.core.network.RoomDto
@@ -247,7 +253,10 @@ var incomingCall by remember { mutableStateOf<CallUiState?>(null) }
 var activeCall by remember { mutableStateOf<CallUiState?>(null) }
 var pendingOutgoingPeer by remember { mutableStateOf<DialogUserDto?>(null) }
 var pendingAcceptCall by remember { mutableStateOf<CallUiState?>(null) }
+var pendingSocketAcceptCall by remember { mutableStateOf<CallUiState?>(null) }
+var pendingSocketRejectCall by remember { mutableStateOf<CallUiState?>(null) }
 var callMuted by remember { mutableStateOf(false) }
+var callSpeakerEnabled by remember { mutableStateOf(true) }
 
 fun hasMicPermission(): Boolean {
     return ContextCompat.checkSelfPermission(
@@ -266,9 +275,27 @@ fun endCurrentCall(sendEvent: Boolean = true) {
     incomingCall = null
     pendingOutgoingPeer = null
     pendingAcceptCall = null
+    pendingSocketAcceptCall = null
+    pendingSocketRejectCall = null
     callMuted = false
+    callSpeakerEnabled = true
+    call?.let {
+        CallNotificationHelper.cancelCallNotification(context.applicationContext, it.callId)
+    }
 }
 
+
+fun acceptCallAfterPermission(call: CallUiState) {
+    incomingCall = null
+    activeCall = call.copy(statusText = "Соединяем...")
+    CallNotificationHelper.cancelCallNotification(context.applicationContext, call.callId)
+
+    if (realtimeSocketManager.isConnected()) {
+        realtimeSocketManager.emitCallAccept(call.callId, call.peerUserId)
+    } else {
+        pendingSocketAcceptCall = call
+    }
+}
 
     fun downloadUpdate(update: AppUpdateInfo) {
         if (isDownloadingUpdate) return
@@ -400,6 +427,8 @@ fun endCurrentCall(sendEvent: Boolean = true) {
                 statusText = "Звоним...",
             )
             pendingOutgoingPeer = null
+            callSpeakerEnabled = true
+            callManager.setSpeakerEnabled(true)
             realtimeSocketManager.emitCallInvite(callId, outgoingPeer.id)
             return@rememberLauncherForActivityResult
         }
@@ -407,9 +436,9 @@ fun endCurrentCall(sendEvent: Boolean = true) {
         val call = pendingAcceptCall
         if (call != null) {
             pendingAcceptCall = null
-            incomingCall = null
-            activeCall = call.copy(statusText = "Соединяем...")
-            realtimeSocketManager.emitCallAccept(call.callId, call.peerUserId)
+            callSpeakerEnabled = true
+            callManager.setSpeakerEnabled(true)
+            acceptCallAfterPermission(call)
         }
     }
 
@@ -428,6 +457,8 @@ fun endCurrentCall(sendEvent: Boolean = true) {
             peerName = peer.displayName,
             statusText = "Звоним...",
         )
+        callSpeakerEnabled = true
+        callManager.setSpeakerEnabled(true)
         realtimeSocketManager.emitCallInvite(callId, peer.id)
     }
 
@@ -438,14 +469,105 @@ fun endCurrentCall(sendEvent: Boolean = true) {
             return
         }
 
-        incomingCall = null
-        activeCall = call.copy(statusText = "Соединяем...")
-        realtimeSocketManager.emitCallAccept(call.callId, call.peerUserId)
+        callSpeakerEnabled = true
+        callManager.setSpeakerEnabled(true)
+        acceptCallAfterPermission(call)
     }
 
     LaunchedEffect(authViewModel.isAuthorized) {
         if (authViewModel.isAuthorized && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    LaunchedEffect(realtimeConnected, pendingSocketAcceptCall?.callId) {
+        val call = pendingSocketAcceptCall ?: return@LaunchedEffect
+        if (realtimeConnected) {
+            realtimeSocketManager.emitCallAccept(call.callId, call.peerUserId)
+            pendingSocketAcceptCall = null
+        }
+    }
+
+    LaunchedEffect(realtimeConnected, pendingSocketRejectCall?.callId) {
+        val call = pendingSocketRejectCall ?: return@LaunchedEffect
+        if (realtimeConnected) {
+            realtimeSocketManager.emitCallReject(call.callId, call.peerUserId)
+            pendingSocketRejectCall = null
+        }
+    }
+
+    LaunchedEffect(activeCall?.callId, activeCall?.statusText) {
+        val call = activeCall
+        if (call != null) {
+            CallForegroundService.start(
+                context = context.applicationContext,
+                peerName = call.peerName,
+                status = call.statusText,
+            )
+        } else {
+            CallForegroundService.stop(context.applicationContext)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        CallActionBus.actions.collect { action ->
+            when (action) {
+                is CallNotificationAction.Incoming -> {
+                    if (activeCall == null && incomingCall == null) {
+                        incomingCall = CallUiState(
+                            callId = action.callId,
+                            peerUserId = action.peerUserId,
+                            peerName = action.peerName,
+                            statusText = "Входящий звонок",
+                            incoming = true,
+                        )
+                    }
+                }
+
+                is CallNotificationAction.Accept -> {
+                    val call = CallUiState(
+                        callId = action.callId,
+                        peerUserId = action.peerUserId,
+                        peerName = action.peerName,
+                        statusText = "Соединяем...",
+                        incoming = true,
+                    )
+
+                    if (!hasMicPermission()) {
+                        pendingAcceptCall = call
+                        microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    } else {
+                        callSpeakerEnabled = true
+                        callManager.setSpeakerEnabled(true)
+                        acceptCallAfterPermission(call)
+                    }
+                }
+
+                is CallNotificationAction.Reject -> {
+                    val call = CallUiState(
+                        callId = action.callId,
+                        peerUserId = action.peerUserId,
+                        peerName = "",
+                        statusText = "Отклонён",
+                        incoming = true,
+                    )
+
+                    if (realtimeSocketManager.isConnected()) {
+                        realtimeSocketManager.emitCallReject(action.callId, action.peerUserId)
+                    } else {
+                        pendingSocketRejectCall = call
+                    }
+
+                    if (incomingCall?.callId == action.callId) {
+                        incomingCall = null
+                    }
+                    CallNotificationHelper.cancelCallNotification(context.applicationContext, action.callId)
+                }
+
+                CallNotificationAction.EndCurrent -> {
+                    endCurrentCall(sendEvent = true)
+                }
+            }
         }
     }
 
@@ -680,12 +802,19 @@ fun endCurrentCall(sendEvent: Boolean = true) {
                     return@launch
                 }
 
-                incomingCall = CallUiState(
+                val call = CallUiState(
                     callId = callId,
                     peerUserId = fromUserId,
                     peerName = fromName,
                     statusText = "Входящий звонок",
                     incoming = true,
+                )
+                incomingCall = call
+                CallNotificationHelper.showIncomingCall(
+                    context = context.applicationContext,
+                    callId = call.callId,
+                    fromUserId = call.peerUserId,
+                    fromName = call.peerName,
                 )
             }
         }
@@ -696,7 +825,7 @@ fun endCurrentCall(sendEvent: Boolean = true) {
                 val online = payload.optBoolean("online", false)
                 if (activeCall?.callId == callId) {
                     activeCall = activeCall?.copy(
-                        statusText = if (online) "Вызов отправлен..." else "Пользователь не в сети"
+                        statusText = if (online) "Вызов отправлен..." else "Ожидаем ответ..."
                     )
                 }
             }
@@ -783,10 +912,14 @@ fun endCurrentCall(sendEvent: Boolean = true) {
             scope.launch {
                 val callId = payload.optString("callId")
                 if (activeCall?.callId == callId || incomingCall?.callId == callId) {
+                    CallNotificationHelper.cancelCallNotification(context.applicationContext, callId)
                     callManager.end()
                     activeCall = null
                     incomingCall = null
+                    pendingSocketAcceptCall = null
+                    pendingSocketRejectCall = null
                     callMuted = false
+                    callSpeakerEnabled = true
                 }
             }
         }
@@ -795,10 +928,14 @@ fun endCurrentCall(sendEvent: Boolean = true) {
             scope.launch {
                 val callId = payload.optString("callId")
                 if (activeCall?.callId == callId || incomingCall?.callId == callId) {
+                    CallNotificationHelper.cancelCallNotification(context.applicationContext, callId)
                     callManager.end()
                     activeCall = null
                     incomingCall = null
+                    pendingSocketAcceptCall = null
+                    pendingSocketRejectCall = null
                     callMuted = false
+                    callSpeakerEnabled = true
                 }
             }
         }
@@ -807,10 +944,14 @@ fun endCurrentCall(sendEvent: Boolean = true) {
             scope.launch {
                 val callId = payload.optString("callId")
                 if (activeCall?.callId == callId || incomingCall?.callId == callId) {
+                    CallNotificationHelper.cancelCallNotification(context.applicationContext, callId)
                     callManager.end()
                     activeCall = null
                     incomingCall = null
+                    pendingSocketAcceptCall = null
+                    pendingSocketRejectCall = null
                     callMuted = false
+                    callSpeakerEnabled = true
                 }
             }
         }
@@ -1274,6 +1415,7 @@ fun endCurrentCall(sendEvent: Boolean = true) {
                         onAccept = { acceptIncomingCall(call) },
                         onReject = {
                             realtimeSocketManager.emitCallReject(call.callId, call.peerUserId)
+                            CallNotificationHelper.cancelCallNotification(context.applicationContext, call.callId)
                             incomingCall = null
                         },
                     )
@@ -1284,9 +1426,14 @@ fun endCurrentCall(sendEvent: Boolean = true) {
                         peerName = call.peerName,
                         statusText = call.statusText,
                         muted = callMuted,
+                        speakerEnabled = callSpeakerEnabled,
                         onToggleMute = {
                             callMuted = !callMuted
                             callManager.setMuted(callMuted)
+                        },
+                        onToggleSpeaker = {
+                            callSpeakerEnabled = !callSpeakerEnabled
+                            callManager.setSpeakerEnabled(callSpeakerEnabled)
                         },
                         onEnd = { endCurrentCall(sendEvent = true) },
                     )

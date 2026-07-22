@@ -17,6 +17,7 @@ import com.google.firebase.messaging.RemoteMessage
 import com.pulsemessenger.android.MainActivity
 import com.pulsemessenger.android.PulseApp
 import com.pulsemessenger.android.R
+import com.pulsemessenger.android.core.call.CallNotificationHelper
 
 class FCMService : FirebaseMessagingService() {
 
@@ -28,6 +29,11 @@ class FCMService : FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
 
+        if (data["type"] == "call") {
+            showIncomingCallNotification(data)
+            return
+        }
+
         if (data["type"] == "message") {
             showGroupedMessageNotification(data)
             return
@@ -38,6 +44,21 @@ class FCMService : FirebaseMessagingService() {
         val url = data["url"] ?: "/"
 
         showFallbackNotification(title, body, url)
+    }
+
+    private fun showIncomingCallNotification(data: Map<String, String>) {
+        val callId = data["callId"].orEmpty()
+        val fromUserId = data["fromUserId"]?.toLongOrNull() ?: return
+        val fromName = data["fromName"].orEmpty()
+            .ifBlank { data["senderName"].orEmpty() }
+            .ifBlank { "Pulse" }
+
+        CallNotificationHelper.showIncomingCall(
+            context = this,
+            callId = callId,
+            fromUserId = fromUserId,
+            fromName = fromName,
+        )
     }
 
     private fun showGroupedMessageNotification(data: Map<String, String>) {

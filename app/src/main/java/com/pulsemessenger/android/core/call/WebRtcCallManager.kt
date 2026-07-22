@@ -37,6 +37,7 @@ class WebRtcCallManager(
 
     private val pendingRemoteIce = mutableListOf<CallIcePayload>()
     private var remoteDescriptionSet = false
+    private var speakerEnabled = true
 
     var onIceCandidate: ((CallIcePayload) -> Unit)? = null
     var onStatusChanged: ((String) -> Unit)? = null
@@ -245,6 +246,15 @@ class WebRtcCallManager(
         audioTrack?.setEnabled(!muted)
     }
 
+    fun setSpeakerEnabled(enabled: Boolean) {
+        speakerEnabled = enabled
+        audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        audioManager?.mode = AudioManager.MODE_IN_COMMUNICATION
+        audioManager?.isSpeakerphoneOn = enabled
+    }
+
+    fun isSpeakerEnabled(): Boolean = speakerEnabled
+
     fun end() {
         runCatching {
             peerConnection?.close()
@@ -260,6 +270,7 @@ class WebRtcCallManager(
             audioManager?.mode = AudioManager.MODE_NORMAL
             audioManager?.isSpeakerphoneOn = false
             audioManager = null
+            speakerEnabled = true
         }
 
         pendingRemoteIce.clear()
@@ -272,7 +283,7 @@ class WebRtcCallManager(
 
         audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         audioManager?.mode = AudioManager.MODE_IN_COMMUNICATION
-        audioManager?.isSpeakerphoneOn = false
+        audioManager?.isSpeakerphoneOn = speakerEnabled
 
         val iceServers = listOf(
             PeerConnection.IceServer.builder("stun:stun.l.google.com:19302")
@@ -318,10 +329,11 @@ class WebRtcCallManager(
                     android.util.Log.d("WEBRTC_CALL", "iceConnection=$state")
 
                     when (state) {
+                        PeerConnection.IceConnectionState.CHECKING -> onStatusChanged?.invoke("Соединяем...")
                         PeerConnection.IceConnectionState.CONNECTED,
                         PeerConnection.IceConnectionState.COMPLETED -> onStatusChanged?.invoke("Звонок активен")
-                        PeerConnection.IceConnectionState.DISCONNECTED -> onStatusChanged?.invoke("Соединение потеряно")
-                        PeerConnection.IceConnectionState.FAILED -> onStatusChanged?.invoke("Не удалось соединиться")
+                        PeerConnection.IceConnectionState.DISCONNECTED -> onStatusChanged?.invoke("Соединение потеряно, восстанавливаем...")
+                        PeerConnection.IceConnectionState.FAILED -> onStatusChanged?.invoke("Не удалось соединиться. Можно подождать или завершить звонок")
                         PeerConnection.IceConnectionState.CLOSED -> onStatusChanged?.invoke("Звонок завершён")
                         else -> Unit
                     }
@@ -354,6 +366,8 @@ class WebRtcCallManager(
         if (addLocalAudio) {
             ensureLocalAudioTrack()
         }
+
+        setSpeakerEnabled(speakerEnabled)
     }
 
     private fun ensureLocalAudioTrack() {

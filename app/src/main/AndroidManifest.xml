@@ -52,6 +52,15 @@
         <receiver
             android:name=".core.notification.NotificationReadReceiver"
             android:exported="false" />
+
+        <receiver
+            android:name=".core.call.CallNotificationReceiver"
+            android:exported="false" />
+
+        <service
+            android:name=".core.call.CallForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
     </application>
 
 </manifest>
