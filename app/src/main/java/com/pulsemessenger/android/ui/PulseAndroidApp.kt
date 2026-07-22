@@ -9,12 +9,14 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
 import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -89,6 +91,8 @@ import com.pulsemessenger.android.feature.createroom.CreateRoomScreen
 import com.pulsemessenger.android.feature.createroom.CreateRoomViewModel
 import com.pulsemessenger.android.feature.createroom.CreateRoomViewModelFactory
 import com.pulsemessenger.android.core.realtime.RealtimeSocketManager
+import com.pulsemessenger.android.core.call.CallIcePayload
+import com.pulsemessenger.android.core.call.WebRtcCallManager
 import com.pulsemessenger.android.PulseApp
 import androidx.compose.ui.platform.LocalContext
 import com.pulsemessenger.android.core.network.RoomDto
@@ -99,6 +103,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
+import java.util.UUID
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -237,6 +242,33 @@ fun PulseAndroidApp() {
     var downloadedUpdatePath by remember { mutableStateOf<String?>(null) }
     var isDownloadingUpdate by remember { mutableStateOf(false) }
     var updateError by remember { mutableStateOf<String?>(null) }
+val callManager = remember { WebRtcCallManager(context.applicationContext) }
+var incomingCall by remember { mutableStateOf<CallUiState?>(null) }
+var activeCall by remember { mutableStateOf<CallUiState?>(null) }
+var pendingOutgoingPeer by remember { mutableStateOf<DialogUserDto?>(null) }
+var pendingAcceptCall by remember { mutableStateOf<CallUiState?>(null) }
+var callMuted by remember { mutableStateOf(false) }
+
+fun hasMicPermission(): Boolean {
+    return ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.RECORD_AUDIO,
+    ) == PackageManager.PERMISSION_GRANTED
+}
+
+fun endCurrentCall(sendEvent: Boolean = true) {
+    val call = activeCall ?: incomingCall
+    if (sendEvent && call != null) {
+        realtimeSocketManager.emitCallEnd(call.callId, call.peerUserId)
+    }
+    callManager.end()
+    activeCall = null
+    incomingCall = null
+    pendingOutgoingPeer = null
+    pendingAcceptCall = null
+    callMuted = false
+}
+
 
     fun downloadUpdate(update: AppUpdateInfo) {
         if (isDownloadingUpdate) return
@@ -346,6 +378,70 @@ fun PulseAndroidApp() {
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { _ -> }
+
+    val microphonePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            activeCall = null
+            incomingCall = null
+            pendingOutgoingPeer = null
+            pendingAcceptCall = null
+            return@rememberLauncherForActivityResult
+        }
+
+        val outgoingPeer = pendingOutgoingPeer
+        if (outgoingPeer != null) {
+            val callId = UUID.randomUUID().toString()
+            activeCall = CallUiState(
+                callId = callId,
+                peerUserId = outgoingPeer.id,
+                peerName = outgoingPeer.displayName,
+                statusText = "Звоним...",
+            )
+            pendingOutgoingPeer = null
+            realtimeSocketManager.emitCallInvite(callId, outgoingPeer.id)
+            return@rememberLauncherForActivityResult
+        }
+
+        val call = pendingAcceptCall
+        if (call != null) {
+            pendingAcceptCall = null
+            incomingCall = null
+            activeCall = call.copy(statusText = "Соединяем...")
+            realtimeSocketManager.emitCallAccept(call.callId, call.peerUserId)
+        }
+    }
+
+
+    fun startOutgoingCall(peer: DialogUserDto) {
+        if (!hasMicPermission()) {
+            pendingOutgoingPeer = peer
+            microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+
+        val callId = UUID.randomUUID().toString()
+        activeCall = CallUiState(
+            callId = callId,
+            peerUserId = peer.id,
+            peerName = peer.displayName,
+            statusText = "Звоним...",
+        )
+        realtimeSocketManager.emitCallInvite(callId, peer.id)
+    }
+
+    fun acceptIncomingCall(call: CallUiState) {
+        if (!hasMicPermission()) {
+            pendingAcceptCall = call
+            microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+
+        incomingCall = null
+        activeCall = call.copy(statusText = "Соединяем...")
+        realtimeSocketManager.emitCallAccept(call.callId, call.peerUserId)
+    }
 
     LaunchedEffect(authViewModel.isAuthorized) {
         if (authViewModel.isAuthorized && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -568,6 +664,157 @@ fun PulseAndroidApp() {
             chatViewModel.onTypingUpdate(scope, targetId, userId, isTyping)
             roomChatViewModel.onTypingUpdate(scope, targetId, userId, isTyping)
         }
+
+        realtimeSocketManager.setOnCallIncoming { payload ->
+            scope.launch {
+                val callId = payload.optString("callId")
+                val fromUserId = payload.optLong("fromUserId", 0L)
+                val fromName = payload.optString("fromName").ifBlank { "Pulse" }
+
+                if (callId.isBlank() || fromUserId <= 0L) {
+                    return@launch
+                }
+
+                if (activeCall != null || incomingCall != null) {
+                    realtimeSocketManager.emitCallReject(callId, fromUserId)
+                    return@launch
+                }
+
+                incomingCall = CallUiState(
+                    callId = callId,
+                    peerUserId = fromUserId,
+                    peerName = fromName,
+                    statusText = "Входящий звонок",
+                    incoming = true,
+                )
+            }
+        }
+
+        realtimeSocketManager.setOnCallRinging { payload ->
+            scope.launch {
+                val callId = payload.optString("callId")
+                val online = payload.optBoolean("online", false)
+                if (activeCall?.callId == callId) {
+                    activeCall = activeCall?.copy(
+                        statusText = if (online) "Вызов отправлен..." else "Пользователь не в сети"
+                    )
+                }
+            }
+        }
+
+        realtimeSocketManager.setOnCallAccepted { payload ->
+            scope.launch {
+                val call = activeCall ?: return@launch
+                if (payload.optString("callId") != call.callId) return@launch
+
+                callManager.onIceCandidate = { ice ->
+                    realtimeSocketManager.emitCallIce(
+                        callId = call.callId,
+                        targetUserId = call.peerUserId,
+                        sdpMid = ice.sdpMid,
+                        sdpMLineIndex = ice.sdpMLineIndex,
+                        candidate = ice.candidate,
+                    )
+                }
+                callManager.onStatusChanged = { status ->
+                    activeCall = activeCall?.copy(statusText = status)
+                }
+                callManager.startAsCaller { offer ->
+                    realtimeSocketManager.emitCallOffer(call.callId, call.peerUserId, offer)
+                }
+                activeCall = call.copy(statusText = "Соединяем...")
+            }
+        }
+
+        realtimeSocketManager.setOnCallOffer { payload ->
+            scope.launch {
+                val call = activeCall ?: return@launch
+                if (payload.optString("callId") != call.callId) return@launch
+
+                val offer = payload.optString("sdp")
+                if (offer.isBlank()) return@launch
+
+                callManager.onIceCandidate = { ice ->
+                    realtimeSocketManager.emitCallIce(
+                        callId = call.callId,
+                        targetUserId = call.peerUserId,
+                        sdpMid = ice.sdpMid,
+                        sdpMLineIndex = ice.sdpMLineIndex,
+                        candidate = ice.candidate,
+                    )
+                }
+                callManager.onStatusChanged = { status ->
+                    activeCall = activeCall?.copy(statusText = status)
+                }
+                callManager.startAsCallee(offer) { answer ->
+                    realtimeSocketManager.emitCallAnswer(call.callId, call.peerUserId, answer)
+                }
+            }
+        }
+
+        realtimeSocketManager.setOnCallAnswer { payload ->
+            scope.launch {
+                val call = activeCall ?: return@launch
+                if (payload.optString("callId") != call.callId) return@launch
+
+                val answer = payload.optString("sdp")
+                if (answer.isNotBlank()) {
+                    callManager.handleRemoteAnswer(answer)
+                }
+            }
+        }
+
+        realtimeSocketManager.setOnCallIce { payload ->
+            scope.launch {
+                val call = activeCall ?: return@launch
+                if (payload.optString("callId") != call.callId) return@launch
+
+                callManager.addRemoteIce(
+                    CallIcePayload(
+                        sdpMid = payload.optString("sdpMid").ifBlank { null },
+                        sdpMLineIndex = payload.optInt("sdpMLineIndex", 0),
+                        candidate = payload.optString("candidate"),
+                    )
+                )
+            }
+        }
+
+        realtimeSocketManager.setOnCallRejected { payload ->
+            scope.launch {
+                val callId = payload.optString("callId")
+                if (activeCall?.callId == callId || incomingCall?.callId == callId) {
+                    callManager.end()
+                    activeCall = null
+                    incomingCall = null
+                    callMuted = false
+                }
+            }
+        }
+
+        realtimeSocketManager.setOnCallCancelled { payload ->
+            scope.launch {
+                val callId = payload.optString("callId")
+                if (activeCall?.callId == callId || incomingCall?.callId == callId) {
+                    callManager.end()
+                    activeCall = null
+                    incomingCall = null
+                    callMuted = false
+                }
+            }
+        }
+
+        realtimeSocketManager.setOnCallEnded { payload ->
+            scope.launch {
+                val callId = payload.optString("callId")
+                if (activeCall?.callId == callId || incomingCall?.callId == callId) {
+                    callManager.end()
+                    activeCall = null
+                    incomingCall = null
+                    callMuted = false
+                }
+            }
+        }
+
         onDispose {
             realtimeSocketManager.setOnConnectionStateChanged(null)
             realtimeSocketManager.setOnConnectionError(null)
@@ -583,6 +830,16 @@ fun PulseAndroidApp() {
             realtimeSocketManager.setOnPollUpdate(null)
             realtimeSocketManager.setOnPresenceUpdate(null)
             realtimeSocketManager.setOnTypingUpdate(null)
+            realtimeSocketManager.setOnCallIncoming(null)
+            realtimeSocketManager.setOnCallRinging(null)
+            realtimeSocketManager.setOnCallAccepted(null)
+            realtimeSocketManager.setOnCallRejected(null)
+            realtimeSocketManager.setOnCallCancelled(null)
+            realtimeSocketManager.setOnCallOffer(null)
+            realtimeSocketManager.setOnCallAnswer(null)
+            realtimeSocketManager.setOnCallIce(null)
+            realtimeSocketManager.setOnCallEnded(null)
+            realtimeSocketManager.setOnCallError(null)
         }
     }
 
@@ -688,6 +945,9 @@ fun PulseAndroidApp() {
                                 onOpenSearch = { messageSearchOpen = true },
                                 onForwardSelected = { ids ->
                                     forwardPayloads = buildDmForwardPayloads(ids)
+                                },
+                                onCallClick = {
+                                    startOutgoingCall(peer)
                                 }
                             )
                         } else if (room != null && roomSettingsOpen) {
@@ -1007,10 +1267,43 @@ fun PulseAndroidApp() {
                         }
                     )
                 }
+
+                incomingCall?.let { call ->
+                    IncomingCallOverlay(
+                        callerName = call.peerName,
+                        onAccept = { acceptIncomingCall(call) },
+                        onReject = {
+                            realtimeSocketManager.emitCallReject(call.callId, call.peerUserId)
+                            incomingCall = null
+                        },
+                    )
+                }
+
+                activeCall?.let { call ->
+                    ActiveCallOverlay(
+                        peerName = call.peerName,
+                        statusText = call.statusText,
+                        muted = callMuted,
+                        onToggleMute = {
+                            callMuted = !callMuted
+                            callManager.setMuted(callMuted)
+                        },
+                        onEnd = { endCurrentCall(sendEvent = true) },
+                    )
+                }
             }
         }
     }
 }
+
+
+private data class CallUiState(
+    val callId: String,
+    val peerUserId: Long,
+    val peerName: String,
+    val statusText: String,
+    val incoming: Boolean = false,
+)
 
 @Composable
 private fun AmbientBackdrop() {

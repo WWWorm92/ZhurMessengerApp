@@ -17,8 +17,8 @@ android {
         applicationId = "com.pulsemessenger.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 38
-        versionName = "0.3.8"
+        versionCode = 40
+        versionName = "0.4.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -103,10 +103,8 @@ dependencies {
     implementation("com.squareup.retrofit2:converter-gson:2.11.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
-    implementation("com.squareup.okhttp3:okhttp-urlconnection:4.12.0")
     implementation("io.socket:socket.io-client:2.1.1")
+    implementation("io.github.webrtc-sdk:android:144.7559.08")
     implementation("com.google.firebase:firebase-messaging-ktx:24.1.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")

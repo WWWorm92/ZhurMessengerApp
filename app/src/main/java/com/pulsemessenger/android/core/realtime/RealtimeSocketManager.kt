@@ -21,6 +21,16 @@ class RealtimeSocketManager(
     private var onPollUpdate: ((JSONObject) -> Unit)? = null
     private var onPresenceUpdate: ((Set<Long>) -> Unit)? = null
     private var onTypingUpdate: ((String, Long, Long, Boolean) -> Unit)? = null
+    private var onCallIncoming: ((JSONObject) -> Unit)? = null
+    private var onCallRinging: ((JSONObject) -> Unit)? = null
+    private var onCallAccepted: ((JSONObject) -> Unit)? = null
+    private var onCallRejected: ((JSONObject) -> Unit)? = null
+    private var onCallCancelled: ((JSONObject) -> Unit)? = null
+    private var onCallOffer: ((JSONObject) -> Unit)? = null
+    private var onCallAnswer: ((JSONObject) -> Unit)? = null
+    private var onCallIce: ((JSONObject) -> Unit)? = null
+    private var onCallEnded: ((JSONObject) -> Unit)? = null
+    private var onCallError: ((JSONObject) -> Unit)? = null
 
     private var onConnectionStateChanged: ((Boolean) -> Unit)? = null
     private var onConnectionError: ((String?) -> Unit)? = null
@@ -30,12 +40,6 @@ class RealtimeSocketManager(
         try {
             val options = IO.Options.builder()
                 .setAuth(
-                    mapOf(
-                        "token" to token,
-                        "deviceKey" to deviceKey,
-                        "client" to "android"
-                    )
-                ).setAuth(
                     mapOf(
                         "token" to token,
                         "deviceKey" to deviceKey,
@@ -132,6 +136,55 @@ class RealtimeSocketManager(
                         onTypingUpdate?.invoke(scope, targetId, userId, isTyping)
                     }
                 }
+                on("call:incoming") { args ->
+                    val payload = args.firstOrNull() as? JSONObject ?: return@on
+                    onCallIncoming?.invoke(payload)
+                }
+                on("call:ringing") { args ->
+                    val payload = args.firstOrNull() as? JSONObject ?: return@on
+                    onCallRinging?.invoke(payload)
+                }
+                on("call:accepted") { args ->
+                    val payload = args.firstOrNull() as? JSONObject ?: return@on
+                    onCallAccepted?.invoke(payload)
+                }
+                on("call:rejected") { args ->
+                    val payload = args.firstOrNull() as? JSONObject ?: return@on
+                    onCallRejected?.invoke(payload)
+                }
+                on("call:cancelled") { args ->
+                    val payload = args.firstOrNull() as? JSONObject ?: return@on
+                    onCallCancelled?.invoke(payload)
+                }
+                on("call:offer") { args ->
+                    val payload = args.firstOrNull() as? JSONObject ?: return@on
+                    onCallOffer?.invoke(payload)
+                }
+                on("call:answer") { args ->
+                    val payload = args.firstOrNull() as? JSONObject ?: return@on
+                    onCallAnswer?.invoke(payload)
+                }
+                on("call:ice") { args ->
+                    val payload = args.firstOrNull() as? JSONObject ?: return@on
+                    val callId = payload.optString("callId")
+                    val fromUserId = payload.optLong("fromUserId", 0L)
+                    val candidate = payload.optString("candidate")
+
+                    android.util.Log.d(
+                        "WEBRTC_CALL",
+                        "received ICE callId=$callId fromUserId=$fromUserId mid=${payload.optString("sdpMid")} index=${payload.optInt("sdpMLineIndex", 0)} len=${candidate.length}"
+                    )
+
+                    onCallIce?.invoke(payload)
+                }
+                on("call:ended") { args ->
+                    val payload = args.firstOrNull() as? JSONObject ?: return@on
+                    onCallEnded?.invoke(payload)
+                }
+                on("call:error") { args ->
+                    val payload = args.firstOrNull() as? JSONObject ?: return@on
+                    onCallError?.invoke(payload)
+                }
                 connect()
             }
         } catch (_: URISyntaxException) {
@@ -212,6 +265,134 @@ class RealtimeSocketManager(
                 .put("scope", if (scope == "room") "room" else "dm")
                 .put("targetId", targetId)
                 .put("isTyping", isTyping)
+        )
+    }
+
+
+    fun setOnCallIncoming(listener: ((JSONObject) -> Unit)?) {
+        onCallIncoming = listener
+    }
+
+    fun setOnCallRinging(listener: ((JSONObject) -> Unit)?) {
+        onCallRinging = listener
+    }
+
+    fun setOnCallAccepted(listener: ((JSONObject) -> Unit)?) {
+        onCallAccepted = listener
+    }
+
+    fun setOnCallRejected(listener: ((JSONObject) -> Unit)?) {
+        onCallRejected = listener
+    }
+
+    fun setOnCallCancelled(listener: ((JSONObject) -> Unit)?) {
+        onCallCancelled = listener
+    }
+
+    fun setOnCallOffer(listener: ((JSONObject) -> Unit)?) {
+        onCallOffer = listener
+    }
+
+    fun setOnCallAnswer(listener: ((JSONObject) -> Unit)?) {
+        onCallAnswer = listener
+    }
+
+    fun setOnCallIce(listener: ((JSONObject) -> Unit)?) {
+        onCallIce = listener
+    }
+
+    fun setOnCallEnded(listener: ((JSONObject) -> Unit)?) {
+        onCallEnded = listener
+    }
+
+    fun setOnCallError(listener: ((JSONObject) -> Unit)?) {
+        onCallError = listener
+    }
+
+    fun emitCallInvite(callId: String, targetUserId: Long) {
+        if (callId.isBlank() || targetUserId <= 0L) return
+        socket?.emit(
+            "call:invite",
+            JSONObject()
+                .put("callId", callId)
+                .put("targetUserId", targetUserId)
+                .put("callType", "audio")
+        )
+    }
+
+    fun emitCallAccept(callId: String, targetUserId: Long) {
+        emitCallControl("call:accept", callId, targetUserId)
+    }
+
+    fun emitCallReject(callId: String, targetUserId: Long) {
+        emitCallControl("call:reject", callId, targetUserId)
+    }
+
+    fun emitCallCancel(callId: String, targetUserId: Long) {
+        emitCallControl("call:cancel", callId, targetUserId)
+    }
+
+    fun emitCallEnd(callId: String, targetUserId: Long) {
+        emitCallControl("call:end", callId, targetUserId)
+    }
+
+    fun emitCallOffer(callId: String, targetUserId: Long, sdp: String) {
+        emitCallSdp("call:offer", callId, targetUserId, sdp)
+    }
+
+    fun emitCallAnswer(callId: String, targetUserId: Long, sdp: String) {
+        emitCallSdp("call:answer", callId, targetUserId, sdp)
+    }
+
+    fun emitCallIce(
+        callId: String,
+        targetUserId: Long,
+        sdpMid: String?,
+        sdpMLineIndex: Int,
+        candidate: String,
+    ) {
+        if (callId.isBlank() || targetUserId <= 0L || candidate.isBlank()) {
+            android.util.Log.w(
+                "WEBRTC_CALL",
+                "emit ICE skipped callId=$callId targetUserId=$targetUserId len=${candidate.length}"
+            )
+            return
+        }
+
+        android.util.Log.d(
+            "WEBRTC_CALL",
+            "emit ICE callId=$callId targetUserId=$targetUserId mid=$sdpMid index=$sdpMLineIndex len=${candidate.length}"
+        )
+
+        socket?.emit(
+            "call:ice",
+            JSONObject()
+                .put("callId", callId)
+                .put("targetUserId", targetUserId)
+                .put("sdpMid", sdpMid ?: JSONObject.NULL)
+                .put("sdpMLineIndex", sdpMLineIndex)
+                .put("candidate", candidate)
+        )
+    }
+
+    private fun emitCallControl(event: String, callId: String, targetUserId: Long) {
+        if (callId.isBlank() || targetUserId <= 0L) return
+        socket?.emit(
+            event,
+            JSONObject()
+                .put("callId", callId)
+                .put("targetUserId", targetUserId)
+        )
+    }
+
+    private fun emitCallSdp(event: String, callId: String, targetUserId: Long, sdp: String) {
+        if (callId.isBlank() || targetUserId <= 0L || sdp.isBlank()) return
+        socket?.emit(
+            event,
+            JSONObject()
+                .put("callId", callId)
+                .put("targetUserId", targetUserId)
+                .put("sdp", sdp)
         )
     }
 

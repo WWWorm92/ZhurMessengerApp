@@ -36,6 +36,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Share
@@ -138,6 +139,7 @@ fun DmChatScreen(
     onBack: () -> Unit,
     onOpenSearch: () -> Unit,
     onForwardSelected: (Set<Long>) -> Unit,
+    onCallClick: () -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     var fullscreenImageModel by remember { mutableStateOf<Any?>(null) }
@@ -341,6 +343,10 @@ fun DmChatScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                    }
+
+                    IconButton(onClick = onCallClick) {
+                        Icon(Icons.Default.Call, contentDescription = "Позвонить")
                     }
 
                     IconButton(onClick = onOpenSearch) {
