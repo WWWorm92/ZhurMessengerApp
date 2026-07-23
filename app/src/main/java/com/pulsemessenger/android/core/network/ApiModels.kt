@@ -37,6 +37,16 @@ data class DialogUserDto(
     val lastFileName: String = "",
     val lastMessageType: String = "text",
     val lastMessageAt: String? = null,
+    // Encrypted fields for Android-only local dialog preview decryption.
+    // Web can ignore them; server still does not see plaintext content.
+    val lastMessageId: Long? = null,
+    val lastSenderId: Long? = null,
+    val lastReceiverId: Long? = null,
+    val lastEncryptedPayload: String = "",
+    val lastEncryptedHeader: String = "",
+    val lastEncryptionVersion: Int = 0,
+    val lastSenderDeviceId: Long? = null,
+    val lastRecipientDeviceId: Long? = null,
     val pinned: Boolean = false,
     val muted: Boolean = false,
     val archived: Boolean = false,
@@ -92,13 +102,17 @@ data class DmMessageDto(
     val encryptionVersion: Int = 0,
     val senderDeviceId: Long? = null,
     val recipientDeviceId: Long? = null,
-    val encryptedAttachmentUrl: String = "",
-    val encryptedAttachmentFileName: String = "",
+    val encryptedAttachmentUrl: String? = null,
+    val encryptedAttachmentFileName: String? = null,
     val encryptedAttachmentFileSize: Long? = null,
-    val encryptedAttachmentMimeType: String = "",
-    val encryptedAttachmentKey: String = "",
-    val encryptedAttachmentIv: String = "",
-    val encryptedAttachmentKind: String = "",
+    val encryptedAttachmentMimeType: String? = null,
+    val encryptedAttachmentKey: String? = null,
+    val encryptedAttachmentIv: String? = null,
+    val encryptedAttachmentKind: String? = null,
+    // Local-only E2EE image thumbnail embedded inside encrypted metadata.
+    // Server never sees the plaintext image preview because this is decrypted on Android from encryptedPayload.
+    val encryptedAttachmentPreviewMimeType: String? = null,
+    val encryptedAttachmentPreviewData: String? = null,
     val forwardedFromName: String = "",
     val replyToMessageId: Long? = null,
     val editedAt: String? = null,
@@ -106,6 +120,14 @@ data class DmMessageDto(
     val poll: PollDto? = null,
     val reactions: List<MessageReactionDto> = emptyList(),
     val createdAt: String = "",
+    // Local-only fields. They are not sent by the server; Android uses them for pending/sent/failed UI.
+    val localSendState: String? = null,
+    val localError: String? = null,
+    // Local-only media fields for Telegram-like instant attachment UI.
+    // They are never sent by the server.
+    val localMediaUri: String? = null,
+    val localMediaState: String? = null,
+    val localMediaProgress: Int? = null,
 )
 
 data class MessagesResponse(

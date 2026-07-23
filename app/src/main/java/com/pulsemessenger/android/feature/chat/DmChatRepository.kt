@@ -24,6 +24,8 @@ import com.pulsemessenger.android.core.network.UnpinRequest
 import com.pulsemessenger.android.core.network.VotePollRequest
 import androidx.core.content.FileProvider
 import com.pulsemessenger.android.core.session.SessionStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 
@@ -83,10 +85,13 @@ class DmChatRepository(
             }
 
             val body = response.body()
+            val decryptedMessages = withContext(Dispatchers.Default) {
+                body?.messages.orEmpty().map { e2eeCrypto.tryDecryptDmMessage(it) }
+            }
 
             Result.success(
                 DmMessagesPayload(
-                    messages = body?.messages.orEmpty().map { e2eeCrypto.tryDecryptDmMessage(it) },
+                    messages = decryptedMessages,
                     peerLastReadAt = body?.peerLastReadAt,
                     hasMore = body?.hasMore == true,
                 )
@@ -309,7 +314,14 @@ class DmChatRepository(
             )
         }
 
-        val prepared = runCatching { E2EEAttachmentCrypto(context).prepare(uri) }.getOrElse { error ->
+        val attachmentCrypto = E2EEAttachmentCrypto(context)
+        val embeddedPreview = if (attachmentKind == "image") {
+            runCatching { attachmentCrypto.createEmbeddedImagePreview(uri) }.getOrNull()
+        } else {
+            null
+        }
+
+        val prepared = runCatching { attachmentCrypto.prepare(uri) }.getOrElse { error ->
             return Result.failure(IllegalStateException(error.message ?: "Failed to encrypt attachment"))
         }
 
@@ -327,21 +339,29 @@ class DmChatRepository(
             val visibleKind = if (attachmentKind == "image") "image" else "file"
             val fallbackPreview = if (visibleKind == "image") "Изображение" else "Файл"
 
+            val attachmentJson = JSONObject()
+                .put("kind", visibleKind)
+                .put("url", upload.fileUrl)
+                .put("fileName", prepared.originalFileName)
+                .put("fileSize", prepared.originalSize ?: upload.fileSize ?: 0L)
+                .put("mimeType", prepared.originalMimeType)
+                .put("alg", "AES-256-GCM")
+                .put("key", prepared.fileKeyBase64)
+                .put("iv", prepared.fileIvBase64)
+
+            if (embeddedPreview != null) {
+                attachmentJson.put(
+                    "preview",
+                    JSONObject()
+                        .put("mimeType", embeddedPreview.mimeType)
+                        .put("data", embeddedPreview.dataBase64)
+                )
+            }
+
             val manifest = JSONObject()
                 .put("kind", "attachment")
                 .put("caption", caption)
-                .put(
-                    "attachment",
-                    JSONObject()
-                        .put("kind", visibleKind)
-                        .put("url", upload.fileUrl)
-                        .put("fileName", prepared.originalFileName)
-                        .put("fileSize", prepared.originalSize ?: upload.fileSize ?: 0L)
-                        .put("mimeType", prepared.originalMimeType)
-                        .put("alg", "AES-256-GCM")
-                        .put("key", prepared.fileKeyBase64)
-                        .put("iv", prepared.fileIvBase64)
-                )
+                .put("attachment", attachmentJson)
 
             val encrypted = e2eeCrypto.encryptDmText(peerUserId, manifest.toString()).getOrElse { error ->
                 return Result.failure(IllegalStateException(error.message ?: "Failed to encrypt attachment metadata"))
@@ -380,13 +400,13 @@ class DmChatRepository(
             val message = response.body()?.message
                 ?: return Result.failure(IllegalStateException("Empty message response"))
 
-            val label = if (visibleKind == "image") "🔐 Зашифрованное изображение" else "🔐 Зашифрованный файл"
+            val fallbackFileName = if (visibleKind == "image") "Изображение" else "Файл"
             val displayMessage = message.copy(
-                content = caption.ifBlank { label },
+                content = caption,
                 type = "file",
                 imageUrl = "",
                 fileUrl = upload.fileUrl,
-                fileName = "$label: ${prepared.originalFileName}",
+                fileName = prepared.originalFileName.ifBlank { fallbackFileName },
                 fileSize = prepared.originalSize ?: upload.fileSize,
                 encryptedAttachmentUrl = upload.fileUrl,
                 encryptedAttachmentFileName = prepared.originalFileName,
@@ -395,12 +415,14 @@ class DmChatRepository(
                 encryptedAttachmentKey = prepared.fileKeyBase64,
                 encryptedAttachmentIv = prepared.fileIvBase64,
                 encryptedAttachmentKind = visibleKind,
+                encryptedAttachmentPreviewMimeType = embeddedPreview?.mimeType.orEmpty(),
+                encryptedAttachmentPreviewData = embeddedPreview?.dataBase64.orEmpty(),
             )
 
             // Сразу кладём расшифрованную копию в стабильный кэш отправителя.
             // Поэтому собственное вложение открывается и получает превью без обратного скачивания с сервера.
             runCatching {
-                E2EEAttachmentCrypto(context).decryptToCache(
+                attachmentCrypto.decryptToCache(
                     encryptedFile = prepared.tempFile,
                     originalFileName = prepared.originalFileName,
                     originalMimeType = prepared.originalMimeType,
@@ -491,7 +513,7 @@ class DmChatRepository(
                 ?: return Result.failure(IllegalStateException("Empty attachment response"))
 
             encryptedTemp.outputStream().use { output ->
-                body.byteStream().use { input -> input.copyTo(output) }
+                body.byteStream().use { input -> input.copyTo(output, FAST_COPY_BUFFER_SIZE) }
             }
 
             val decrypted = E2EEAttachmentCrypto(context).decryptToCache(
@@ -545,6 +567,19 @@ class DmChatRepository(
             return Result.success(previewUri.toString())
         }
 
+        val embeddedPreviewData = safeString(message.encryptedAttachmentPreviewData)
+        if (embeddedPreviewData.isNotBlank()) {
+            val embedded = E2EEAttachmentCrypto(context).embeddedImagePreviewToCache(
+                previewDataBase64 = embeddedPreviewData,
+                previewMimeType = safeString(message.encryptedAttachmentPreviewMimeType),
+                cacheKey = "embedded-$cacheKey",
+            )
+
+            if (embedded != null) {
+                return Result.success(embedded.uri.toString())
+            }
+        }
+
         val opened = downloadAndDecryptAttachment(context, message).getOrElse { error ->
             return Result.failure(IllegalStateException(error.message ?: "Failed to decrypt image preview"))
         }
@@ -592,6 +627,7 @@ class DmChatRepository(
             message.fileName
                 .removePrefix("🔐 Зашифрованный файл: ")
                 .removePrefix("🔐 Зашифрованное изображение: ")
+                .removePrefix("🔐 Зашифрованное вложение: ")
                 .ifBlank { "attachment" }
         }
     }
@@ -639,6 +675,10 @@ class DmChatRepository(
         }
         val base = com.pulsemessenger.android.BuildConfig.BASE_URL.trimEnd('/')
         return if (value.startsWith("/")) base + value else "$base/$value"
+    }
+
+    private companion object {
+        const val FAST_COPY_BUFFER_SIZE = 1024 * 1024
     }
 
     suspend fun editMessage(messageId: Long, content: String): Result<DmMessageDto> {

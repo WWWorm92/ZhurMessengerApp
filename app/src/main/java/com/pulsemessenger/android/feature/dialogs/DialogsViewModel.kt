@@ -7,7 +7,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.pulsemessenger.android.core.network.DialogUserDto
 import com.pulsemessenger.android.core.network.DmMessageDto
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class DialogsViewModel(
     private val repository: DialogsRepository,
@@ -57,27 +59,18 @@ class DialogsViewModel(
 
     fun load() {
         if (isLoading) return
-
         isLoading = true
         error = null
-
         viewModelScope.launch {
-            try {
-                repository.loadUsers()
-                    .onSuccess { loaded ->
-                        users = loaded.sortedWith(
-                            compareByDescending<DialogUserDto> { it.pinned }
-                                .thenByDescending { it.lastMessageAt ?: "" }
-                        )
-                    }
-                    .onFailure { throwable ->
-                        error = throwable.message ?: "Не удалось обновить диалоги"
-                    }
-            } catch (_: Throwable) {
-                error = "Нет соединения с сервером"
-            } finally {
-                isLoading = false
-            }
+            withContext(Dispatchers.IO) { repository.loadUsers() }
+                .onSuccess { loaded ->
+                    users = loaded.sortedWith(
+                        compareByDescending<DialogUserDto> { it.pinned }
+                            .thenByDescending { it.lastMessageAt ?: "" }
+                    )
+                }
+                .onFailure { error = it.message ?: "Failed to load dialogs" }
+            isLoading = false
         }
     }
 

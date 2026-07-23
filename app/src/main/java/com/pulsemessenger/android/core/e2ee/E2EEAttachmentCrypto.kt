@@ -1,6 +1,8 @@
 package com.pulsemessenger.android.core.e2ee
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
@@ -9,6 +11,7 @@ import androidx.core.content.FileProvider
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.FileInputStream
@@ -41,6 +44,11 @@ class E2EEAttachmentCrypto(
         val kind: String,
     )
 
+    data class EmbeddedImagePreview(
+        val mimeType: String,
+        val dataBase64: String,
+    )
+
     fun prepare(uri: Uri): PreparedEncryptedAttachment {
         val originalFileName = queryDisplayName(uri).ifBlank { "attachment" }
         val originalSize = querySize(uri)
@@ -63,7 +71,7 @@ class E2EEAttachmentCrypto(
             requireNotNull(input) { "Cannot open attachment" }
             FileOutputStream(encryptedFile).use { fileOutput ->
                 CipherOutputStream(fileOutput, cipher).use { cipherOutput ->
-                    input.copyTo(cipherOutput)
+                    input.copyTo(cipherOutput, FAST_COPY_BUFFER_SIZE)
                 }
             }
         }
@@ -121,7 +129,7 @@ class E2EEAttachmentCrypto(
             FileInputStream(encryptedFile).use { input ->
                 CipherInputStream(input, cipher).use { cipherInput ->
                     FileOutputStream(tempOutputFile).use { output ->
-                        cipherInput.copyTo(output)
+                        cipherInput.copyTo(output, FAST_COPY_BUFFER_SIZE)
                     }
                 }
             }
@@ -204,6 +212,110 @@ class E2EEAttachmentCrypto(
         )
     }
 
+
+    fun createEmbeddedImagePreview(uri: Uri, maxSide: Int = 256): EmbeddedImagePreview? {
+        val sourceMime = context.contentResolver.getType(uri).orEmpty()
+        if (!sourceMime.startsWith("image/")) {
+            return null
+        }
+
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri).use { input ->
+            if (input == null) return null
+            BitmapFactory.decodeStream(input, null, bounds)
+        }
+
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            return null
+        }
+
+        var sampleSize = 1
+        while ((bounds.outWidth / sampleSize) > maxSide * 2 || (bounds.outHeight / sampleSize) > maxSide * 2) {
+            sampleSize *= 2
+        }
+
+        val options = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+        val decoded = context.contentResolver.openInputStream(uri).use { input ->
+            if (input == null) return null
+            BitmapFactory.decodeStream(input, null, options)
+        } ?: return null
+
+        val scaled = scaleBitmapForPreview(decoded, maxSide)
+
+        return try {
+            val output = ByteArrayOutputStream()
+            scaled.compress(Bitmap.CompressFormat.JPEG, 56, output)
+            val bytes = output.toByteArray()
+            if (bytes.isEmpty()) {
+                null
+            } else {
+                EmbeddedImagePreview(
+                    mimeType = "image/jpeg",
+                    dataBase64 = b64(bytes),
+                )
+            }
+        } finally {
+            if (scaled !== decoded) {
+                scaled.recycle()
+            }
+            decoded.recycle()
+        }
+    }
+
+    fun embeddedImagePreviewToCache(
+        previewDataBase64: String,
+        previewMimeType: String,
+        cacheKey: String,
+    ): DecryptedAttachment? {
+        if (previewDataBase64.isBlank()) {
+            return null
+        }
+
+        val mime = previewMimeType.ifBlank { "image/jpeg" }
+        val extension = when (mime.lowercase()) {
+            "image/png" -> "png"
+            "image/webp" -> "webp"
+            "image/gif" -> "gif"
+            else -> "jpg"
+        }
+
+        val directory = File(context.cacheDir, "e2ee_thumbnails")
+        directory.mkdirs()
+
+        val safeKey = sanitizeCacheKey(cacheKey).ifBlank { UUID.randomUUID().toString() }
+        val file = File(directory, "$safeKey.$extension")
+
+        if (!file.isFile || file.length() <= 0L) {
+            val bytes = b64decode(previewDataBase64)
+            if (bytes.isEmpty()) {
+                return null
+            }
+            file.writeBytes(bytes)
+        }
+
+        return makeDecryptedAttachment(
+            file = file,
+            originalFileName = file.name,
+            originalMimeType = mime,
+            kind = "image",
+        )
+    }
+
+    private fun scaleBitmapForPreview(bitmap: Bitmap, maxSide: Int): Bitmap {
+        val width = bitmap.width
+        val height = bitmap.height
+
+        if (width <= 0 || height <= 0 || (width <= maxSide && height <= maxSide)) {
+            return bitmap
+        }
+
+        val scale = maxSide.toFloat() / maxOf(width, height).toFloat()
+        val targetWidth = (width * scale).toInt().coerceAtLeast(1)
+        val targetHeight = (height * scale).toInt().coerceAtLeast(1)
+
+        return Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
+    }
+
     private fun queryDisplayName(uri: Uri): String {
         return context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
             ?.use { cursor ->
@@ -263,5 +375,9 @@ class E2EEAttachmentCrypto(
 
     private fun b64(bytes: ByteArray): String {
         return Base64.encodeToString(bytes, Base64.NO_WRAP)
+    }
+
+    private companion object {
+        const val FAST_COPY_BUFFER_SIZE = 1024 * 1024
     }
 }

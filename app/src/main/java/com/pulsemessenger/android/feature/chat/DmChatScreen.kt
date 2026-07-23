@@ -484,7 +484,7 @@ fun DmChatScreen(
                         DmMessageBubble(
                             message = message,
                             albumMessages = albumMessages,
-                            isMine = currentUserId != null && message.senderId == currentUserId,
+                            isMine = (currentUserId != null && message.senderId == currentUserId) || message.id < 0,
                             isEditing = viewModel.editingMessageId == message.id,
                             encryptedImagePreviewUrl = viewModel.encryptedPreviewFor(message.id),
                             isEncryptedImageAttachment = viewModel.isEncryptedImageAttachment(message),
@@ -512,6 +512,7 @@ fun DmChatScreen(
                                     onOpenUrl = { url -> uriHandler.openUri(url) },
                                 )
                             },
+                            onRetrySend = { viewModel.retryPendingMessage(message.id, context) },
                             quickReactions = viewModel.quickReactions,
                             onToggleReaction = { emoji -> viewModel.toggleReaction(message.id, emoji) },
                             currentUserId = currentUserId,
@@ -879,6 +880,7 @@ private fun DmMessageBubble(
     onOpenImage: (Any) -> Unit,
     onOpenVideo: (String) -> Unit,
     onOpenFile: (DmMessageDto) -> Unit,
+    onRetrySend: () -> Unit = {},
     quickReactions: List<String>,
     onToggleReaction: (String) -> Unit,
     currentUserId: Long?,
@@ -898,7 +900,7 @@ private fun DmMessageBubble(
 ) {
     var menuExpanded by remember(message.id) { mutableStateOf(false) }
     var confirmDelete by remember(message.id) { mutableStateOf(false) }
-    val resolvedFileUrl = if (message.fileUrl.isNotBlank()) resolveBackendMediaUrl(message.fileUrl) else ""
+    val resolvedFileUrl = if (message.fileUrl.isNotBlank()) resolveChatMediaUrl(message.fileUrl) else ""
     var replySwipeOffset by remember(message.id) { mutableStateOf(0f) }
     val maxReplySwipe = with(LocalDensity.current) { 56.dp.toPx() }
     val replyTrigger = with(LocalDensity.current) { 34.dp.toPx() }
@@ -1014,25 +1016,43 @@ private fun DmMessageBubble(
                                 onOpen = { imageIndex ->
                                     val imageUrl = albumMessages.getOrNull(imageIndex)?.imageUrl.orEmpty()
                                     if (imageUrl.isNotBlank()) {
-                                        onOpenImage(resolveBackendMediaUrl(imageUrl))
+                                        onOpenImage(resolveChatMediaUrl(imageUrl))
                                     }
                                 }
                             )
                         } else if (message.imageUrl.isNotBlank() && message.deletedAt == null) {
                             Spacer(modifier = Modifier.height(8.dp))
-                            AsyncImage(
-                                model = resolveBackendMediaUrl(message.imageUrl),
-                                contentDescription = "image",
-                                contentScale = ContentScale.Crop,
+                            Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .heightIn(min = 120.dp, max = 280.dp)
                                     .clip(RoundedCornerShape(14.dp))
                                     .background(MaterialTheme.colorScheme.surfaceVariant)
                                     .clickable(enabled = !selectionMode) {
-                                        onOpenImage(resolveBackendMediaUrl(message.imageUrl))
+                                        onOpenImage(resolveChatMediaUrl(message.imageUrl))
                                     }
-                            )
+                            ) {
+                                AsyncImage(
+                                    model = resolveChatMediaUrl(message.imageUrl),
+                                    contentDescription = "image",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                                if (message.localMediaState == "uploading") {
+                                    Box(
+                                        modifier = Modifier
+                                            .matchParentSize()
+                                            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.22f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(28.dp),
+                                            strokeWidth = 2.5.dp,
+                                            color = MaterialTheme.colorScheme.onPrimary,
+                                        )
+                                    }
+                                }
+                            }
                         }
                         if (isEncryptedImageAttachment && message.deletedAt == null) {
                             Spacer(modifier = Modifier.height(8.dp))
@@ -1072,12 +1092,6 @@ private fun DmMessageBubble(
                                         CircularProgressIndicator(
                                             modifier = Modifier.size(22.dp),
                                             strokeWidth = 2.dp
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text(
-                                            "Расшифровываем превью...",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
                                 }
@@ -1133,6 +1147,33 @@ private fun DmMessageBubble(
                                 }
                             }
                         }
+                        val localSendState = message.localSendState.orEmpty()
+                        val localMediaState = message.localMediaState.orEmpty()
+                        if (localSendState.isNotBlank() && message.deletedAt == null) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            val statusText = when (localSendState) {
+                                "sending" -> if (localMediaState == "uploading") "" else "Отправляется..."
+                                "failed" -> "Не отправлено. Нажмите, чтобы повторить"
+                                else -> ""
+                            }
+                            if (statusText.isNotBlank()) {
+                                Text(
+                                    text = statusText,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (localSendState == "failed") {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    modifier = if (localSendState == "failed") {
+                                        Modifier.clickable(enabled = !selectionMode) { onRetrySend() }
+                                    } else {
+                                        Modifier
+                                    }
+                                )
+                            }
+                        }
+
                         Spacer(modifier = Modifier.height(5.dp))
 
                         Row(
@@ -1492,14 +1533,14 @@ private fun MessageImageAlbum(
                     horizontalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     AlbumImageTile(
-                        model = resolveBackendMediaUrl(visible[0]),
+                        model = resolveChatMediaUrl(visible[0]),
                         enabled = enabled,
                         modifier = Modifier.weight(1f),
                         onClick = { onOpen(0) }
                     )
 
                     AlbumImageTile(
-                        model = resolveBackendMediaUrl(visible[1]),
+                        model = resolveChatMediaUrl(visible[1]),
                         enabled = enabled,
                         modifier = Modifier.weight(1f),
                         onClick = { onOpen(1) }
@@ -1513,14 +1554,14 @@ private fun MessageImageAlbum(
                     horizontalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     AlbumImageTile(
-                        model = resolveBackendMediaUrl(visible[2]),
+                        model = resolveChatMediaUrl(visible[2]),
                         enabled = enabled,
                         modifier = Modifier.weight(1f),
                         onClick = { onOpen(2) }
                     )
 
                     AlbumImageTile(
-                        model = resolveBackendMediaUrl(visible[3]),
+                        model = resolveChatMediaUrl(visible[3]),
                         enabled = enabled,
                         modifier = Modifier.weight(1f),
                         overlayText = if (extra > 0) "+$extra" else null,
@@ -1530,6 +1571,14 @@ private fun MessageImageAlbum(
             }
         }
     }
+}
+
+private fun resolveChatMediaUrl(url: String): String {
+    val value = url.trim()
+    if (value.startsWith("content:") || value.startsWith("file:")) {
+        return value
+    }
+    return resolveBackendMediaUrl(value)
 }
 
 @Composable

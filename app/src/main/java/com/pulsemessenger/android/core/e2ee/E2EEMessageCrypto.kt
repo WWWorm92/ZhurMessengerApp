@@ -129,7 +129,7 @@ class E2EEMessageCrypto(
         }.getOrElse { error ->
             Log.w("E2EE", "decrypt failed message=${message.id}: ${error.message}")
             message.copy(
-                content = "🔐 Не удалось расшифровать сообщение",
+                content = "Сообщение недоступно на этом устройстве",
                 type = "text",
             )
         }
@@ -161,21 +161,19 @@ class E2EEMessageCrypto(
 
             val attachment = root.optJSONObject("attachment") ?: return@runCatching null
             val attachmentKind = attachment.optString("kind", "file")
-            val originalFileName = attachment.optString("fileName", "encrypted-file")
+            val originalFileName = attachment.optString("fileName", "")
             val fileSize = attachment.optLong("fileSize", 0L).takeIf { it > 0L }
             val encryptedUrl = attachment.optString("url", "")
             val caption = root.optString("caption", "")
-            val label = when (attachmentKind) {
-                "image" -> "🔐 Зашифрованное изображение"
-                else -> "🔐 Зашифрованный файл"
-            }
+            val preview = attachment.optJSONObject("preview")
+            val fallbackFileName = if (attachmentKind == "image") "Изображение" else "Файл"
 
             message.copy(
-                content = caption.ifBlank { label },
+                content = caption,
                 type = "file",
                 imageUrl = "",
                 fileUrl = encryptedUrl,
-                fileName = if (originalFileName.isBlank()) label else "$label: $originalFileName",
+                fileName = originalFileName.ifBlank { fallbackFileName },
                 fileSize = fileSize,
                 encryptedAttachmentUrl = encryptedUrl,
                 encryptedAttachmentFileName = originalFileName,
@@ -184,6 +182,8 @@ class E2EEMessageCrypto(
                 encryptedAttachmentKey = attachment.optString("key", ""),
                 encryptedAttachmentIv = attachment.optString("iv", ""),
                 encryptedAttachmentKind = attachmentKind,
+                encryptedAttachmentPreviewMimeType = preview?.optString("mimeType", "").orEmpty(),
+                encryptedAttachmentPreviewData = preview?.optString("data", "").orEmpty(),
             )
         }.getOrNull()
     }

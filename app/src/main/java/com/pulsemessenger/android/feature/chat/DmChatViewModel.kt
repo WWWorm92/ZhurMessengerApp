@@ -21,15 +21,40 @@ import com.pulsemessenger.android.core.network.SharedAttachmentDto
 import com.pulsemessenger.android.core.network.queryDisplayName
 import com.pulsemessenger.android.core.network.queryFileSize
 import com.pulsemessenger.android.ui.resolveBackendMediaUrl
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import java.util.UUID
 
 class DmChatViewModel(
     private val repository: DmChatRepository,
 ) : ViewModel() {
+    private sealed class PendingSendTask {
+        data class Text(
+            val peerUserId: Long,
+            val content: String,
+            val replyToMessageId: Long?,
+        ) : PendingSendTask()
+
+        data class Attachment(
+            val peerUserId: Long,
+            val attachment: PendingAttachment,
+            val caption: String,
+            val replyToMessageId: Long?,
+            val mediaGroupId: String?,
+        ) : PendingSendTask()
+    }
+
+    private var nextPendingMessageId = -1L
+    private val pendingSendTasks = mutableMapOf<Long, PendingSendTask>()
+
     val quickReactions = listOf("😀", "😎", "😂", "😍", "🥳", "👍", "👎", "🔥", "❤️", "💔", "🤝", "👏")
     var peer by mutableStateOf<DialogUserDto?>(null)
     var messages by mutableStateOf<List<DmMessageDto>>(emptyList())
@@ -128,6 +153,7 @@ class DmChatViewModel(
         cachedEncryptedAttachments = emptySet()
         encryptedImagePreviewJobs.clear()
         encryptedAttachmentPrefetchJobs.clear()
+        pendingSendTasks.clear()
         clearSelection()
         hasMoreMessages = false
         isLoadingOlder = false
@@ -144,13 +170,18 @@ class DmChatViewModel(
         shouldScrollToBottom = true
 
         viewModelScope.launch {
-            repository.loadMessages(
-                peerUserId = currentPeer.id,
-                beforeId = null,
-                limit = 60,
-            )
+            val result = withContext(Dispatchers.IO) {
+                repository.loadMessages(
+                    peerUserId = currentPeer.id,
+                    beforeId = null,
+                    limit = 60,
+                )
+            }
+
+            result
                 .onSuccess { payload ->
-                    messages = payload.messages.sortedBy { it.id }
+                    val localPending = messages.filter { it.id < 0 }
+                    messages = orderedMessages(payload.messages + localPending)
                     peerLastReadAt = payload.peerLastReadAt
                     hasMoreMessages = payload.hasMore
                 }
@@ -175,11 +206,13 @@ class DmChatViewModel(
 
         var addedCount = 0
 
-        repository.loadMessages(
-            peerUserId = currentPeer.id,
-            beforeId = beforeId,
-            limit = 60,
-        )
+        withContext(Dispatchers.IO) {
+            repository.loadMessages(
+                peerUserId = currentPeer.id,
+                beforeId = beforeId,
+                limit = 60,
+            )
+        }
             .onSuccess { payload ->
                 val existingIds = messages.map { it.id }.toSet()
                 val older = payload.messages
@@ -187,9 +220,7 @@ class DmChatViewModel(
                     .sortedBy { it.id }
 
                 if (older.isNotEmpty()) {
-                    messages = (older + messages)
-                        .distinctBy { it.id }
-                        .sortedBy { it.id }
+                    messages = orderedMessages((older + messages).distinctBy { it.id })
 
                     addedCount = older.size
                 }
@@ -224,7 +255,7 @@ class DmChatViewModel(
         profileAttachmentsError = null
 
         viewModelScope.launch {
-            repository.loadAttachments(currentPeer.id)
+            withContext(Dispatchers.IO) { repository.loadAttachments(currentPeer.id) }
                 .onSuccess { attachments ->
                     profileAttachments = attachments
                 }
@@ -290,36 +321,34 @@ class DmChatViewModel(
 
             error = null
             isUploadingImage = true
+            draft = ""
+            replyToMessageId = null
+            replyToMessageContent = ""
+            pendingAttachments = emptyList()
+
+            val queued = toSend.mapIndexed { index, attachment ->
+                val caption = if (index == 0) previousDraft else ""
+                val replyId = if (index == 0) replyingTo else null
+                val tempId = allocatePendingMessageId()
+                val task = PendingSendTask.Attachment(
+                    peerUserId = currentPeer.id,
+                    attachment = attachment,
+                    caption = caption,
+                    replyToMessageId = replyId,
+                    mediaGroupId = mediaGroupId,
+                )
+                pendingSendTasks[tempId] = task
+                tempId to pendingAttachmentMessage(tempId, currentPeer.id, attachment, caption, replyId, mediaGroupId)
+            }
+
+            messages = orderedMessages(messages + queued.map { it.second })
+            shouldScrollToBottom = true
 
             viewModelScope.launch {
-                for ((index, attachment) in toSend.withIndex()) {
-                    val caption = if (index == 0) previousDraft else ""
-                    val replyId = if (index == 0) replyingTo else null
-
-                    val result = sendAttachmentMessage(
-                        context = context,
-                        peerUserId = currentPeer.id,
-                        attachment = attachment,
-                        caption = caption,
-                        replyToMessageId = replyId,
-                        mediaGroupId = mediaGroupId,
-                    )
-
-                    result
-                        .onSuccess { message ->
-                            upsertMessage(message)
-                        }
-                        .onFailure {
-                            error = it.message ?: "Не удалось отправить вложение"
-                            isUploadingImage = false
-                            return@launch
-                        }
+                queued.forEach { (tempId, _) ->
+                    val task = pendingSendTasks[tempId] ?: return@forEach
+                    runPendingSend(tempId, task, context)
                 }
-
-                draft = ""
-                replyToMessageId = null
-                replyToMessageContent = ""
-                pendingAttachments = emptyList()
                 isUploadingImage = false
             }
 
@@ -329,23 +358,24 @@ class DmChatViewModel(
         if (content.isBlank()) return
 
         val replyingTo = replyToMessageId
-        val previousDraft = draft
+        val tempId = allocatePendingMessageId()
+        val task = PendingSendTask.Text(
+            peerUserId = currentPeer.id,
+            content = content,
+            replyToMessageId = replyingTo,
+        )
+
+        pendingSendTasks[tempId] = task
+        messages = orderedMessages(messages + pendingTextMessage(tempId, currentPeer.id, content, replyingTo))
+        shouldScrollToBottom = true
+
         draft = ""
         replyToMessageId = null
         replyToMessageContent = ""
         error = null
 
         viewModelScope.launch {
-            repository.sendMessage(currentPeer.id, content, replyToMessageId = replyingTo)
-                .onSuccess { message ->
-                    upsertMessage(message)
-                }
-                .onFailure {
-                    draft = previousDraft
-                    replyToMessageId = replyingTo
-                    replyToMessageContent = messages.firstOrNull { it.id == replyingTo }?.content ?: ""
-                    error = it.message ?: "Failed to send message"
-                }
+            runPendingSend(tempId, task, context)
         }
     }
 
@@ -509,9 +539,20 @@ class DmChatViewModel(
 
     fun preloadEncryptedImagePreviews(context: Context) {
         messages
+            .asReversed()
             .filter { it.deletedAt == null }
             .filter { repository.isEncryptedAttachment(it) }
-            .forEach { message -> ensureEncryptedAttachmentPrefetched(context, message) }
+            .take(12)
+            .forEach { message ->
+                // Сначала показываем локальное embedded-превью из E2EE metadata.
+                // Оно маленькое и не требует скачивать весь encrypted blob.
+                if (repository.isEncryptedImageAttachment(message)) {
+                    ensureEncryptedImagePreview(context, message)
+                }
+
+                // Полный файл всё равно готовим в фоне, чтобы открытие по нажатию было быстрым.
+                ensureEncryptedAttachmentPrefetched(context, message)
+            }
     }
 
     fun ensureEncryptedAttachmentPrefetched(context: Context, message: DmMessageDto) {
@@ -528,7 +569,7 @@ class DmChatViewModel(
         if (!encryptedAttachmentPrefetchJobs.add(message.id)) return
 
         viewModelScope.launch {
-            repository.prefetchEncryptedAttachment(context, message)
+            withContext(Dispatchers.IO) { repository.prefetchEncryptedAttachment(context, message) }
                 .onSuccess {
                     cachedEncryptedAttachments = cachedEncryptedAttachments + message.id
                     if (repository.isEncryptedImageAttachment(message)) {
@@ -549,7 +590,7 @@ class DmChatViewModel(
         if (!encryptedImagePreviewJobs.add(message.id)) return
 
         viewModelScope.launch {
-            repository.createEncryptedImagePreview(context, message)
+            withContext(Dispatchers.IO) { repository.createEncryptedImagePreview(context, message) }
                 .onSuccess { previewUri ->
                     encryptedImagePreviews = encryptedImagePreviews + (message.id to previewUri)
                 }
@@ -601,7 +642,7 @@ class DmChatViewModel(
 
         error = null
         viewModelScope.launch {
-            repository.downloadAndDecryptAttachment(context, message)
+            withContext(Dispatchers.IO) { repository.downloadAndDecryptAttachment(context, message) }
                 .onSuccess { opened ->
                     if (opened.kind == "image" || opened.mimeType.startsWith("image/")) {
                         onOpenImage(opened.uri.toString())
@@ -620,7 +661,7 @@ class DmChatViewModel(
                     }
                 }
                 .onFailure {
-                    error = it.message ?: "Не удалось открыть зашифрованное вложение"
+                    error = it.message ?: "Не удалось открыть вложение"
                 }
         }
     }
@@ -659,6 +700,62 @@ class DmChatViewModel(
                 )
             }
         }
+    }
+
+    fun retryPendingMessage(messageId: Long, context: Context? = null) {
+        val task = pendingSendTasks[messageId] ?: return
+        if (task is PendingSendTask.Attachment && context == null) {
+            error = "Не удалось повторить отправку вложения"
+            return
+        }
+        markPendingSending(messageId)
+        viewModelScope.launch {
+            runPendingSend(messageId, task, context)
+        }
+    }
+
+    private suspend fun runPendingSend(
+        tempId: Long,
+        task: PendingSendTask,
+        context: Context?,
+    ) {
+        markPendingSending(tempId)
+
+        val result = withContext(Dispatchers.IO) {
+            when (task) {
+                is PendingSendTask.Text -> repository.sendMessage(
+                    peerUserId = task.peerUserId,
+                    content = task.content,
+                    replyToMessageId = task.replyToMessageId,
+                )
+
+                is PendingSendTask.Attachment -> {
+                    val actualContext = context ?: return@withContext Result.failure<DmMessageDto>(IllegalStateException("Нет контекста для отправки вложения"))
+                    sendAttachmentMessage(
+                        context = actualContext,
+                        peerUserId = task.peerUserId,
+                        attachment = task.attachment,
+                        caption = task.caption,
+                        replyToMessageId = task.replyToMessageId,
+                        mediaGroupId = task.mediaGroupId,
+                    )
+                }
+            }
+        }
+
+        result
+            .onSuccess { message ->
+                pendingSendTasks.remove(tempId)
+                replacePendingMessage(tempId, message)
+                if (context != null && repository.isEncryptedAttachment(message)) {
+                    ensureEncryptedAttachmentPrefetched(context, message)
+                }
+            }
+            .onFailure {
+                val message = it.message ?: "Не удалось отправить"
+                markPendingFailed(tempId, message)
+                error = message
+            }
     }
 
     fun onDraftChanged(value: String, emitTyping: (Boolean) -> Unit) {
@@ -750,15 +847,175 @@ class DmChatViewModel(
     fun parseRealtimeMessage(payload: JSONObject): DmMessageDto = repository.decryptMessage(payload.toDmMessageDto())
 
     private fun upsertMessage(message: DmMessageDto) {
+        val currentPeer = peer
+        val matchingPending = findMatchingPendingMessage(currentPeer, message)
+
+        if (matchingPending != null) {
+            pendingSendTasks.remove(matchingPending.id)
+        }
+
         val existed = messages.any { it.id == message.id }
 
-        messages = (messages.filterNot { it.id == message.id } + message)
-            .distinctBy { it.id }
-            .sortedBy { it.id }
+        messages = orderedMessages(
+            (messages
+                .filterNot { it.id == message.id }
+                .filterNot { matchingPending != null && it.id == matchingPending.id } + message)
+                .distinctBy { it.id }
+        )
 
         if (!existed) {
             shouldScrollToBottom = true
         }
+    }
+
+    private fun findMatchingPendingMessage(currentPeer: DialogUserDto?, serverMessage: DmMessageDto): DmMessageDto? {
+        if (currentPeer == null) return null
+
+        // Ищем только echo собственного сообщения в текущий диалог.
+        // Входящие от собеседника трогать нельзя.
+        if (serverMessage.receiverId != currentPeer.id) return null
+
+        val candidates = messages.filter { pending ->
+            pending.id < 0 &&
+                pending.localSendState == "sending" &&
+                pending.receiverId == currentPeer.id
+        }
+
+        if (candidates.isEmpty()) return null
+
+        val serverIsAttachment = isAttachmentLike(serverMessage)
+
+        return candidates.firstOrNull { pending ->
+            val pendingIsAttachment = pending.localMediaUri?.isNotBlank() == true || isAttachmentLike(pending)
+
+            if (pendingIsAttachment || serverIsAttachment) {
+                pendingIsAttachment &&
+                    serverIsAttachment &&
+                    pending.content.trim() == serverMessage.content.trim() &&
+                    samePendingAttachmentKind(pending, serverMessage)
+            } else {
+                pending.content.isNotBlank() && pending.content == serverMessage.content
+            }
+        }
+    }
+
+    private fun isAttachmentLike(message: DmMessageDto): Boolean {
+        return message.imageUrl.isNotBlank() ||
+            message.fileUrl.isNotBlank() ||
+            message.encryptedAttachmentUrl?.isNotBlank() == true ||
+            message.encryptedAttachmentKey?.isNotBlank() == true ||
+            message.encryptedAttachmentPreviewData?.isNotBlank() == true ||
+            repository.isEncryptedAttachment(message)
+    }
+
+    private fun samePendingAttachmentKind(pending: DmMessageDto, serverMessage: DmMessageDto): Boolean {
+        val pendingKind = when {
+            pending.type == "image" || pending.imageUrl.isNotBlank() -> "image"
+            else -> "file"
+        }
+
+        val serverKind = when {
+            serverMessage.encryptedAttachmentKind.equals("image", ignoreCase = true) -> "image"
+            serverMessage.imageUrl.isNotBlank() -> "image"
+            else -> "file"
+        }
+
+        return pendingKind == serverKind
+    }
+
+    private fun replacePendingMessage(tempId: Long, message: DmMessageDto) {
+        messages = orderedMessages(
+            (messages.filterNot { it.id == tempId || it.id == message.id } + message)
+                .distinctBy { it.id }
+        )
+        shouldScrollToBottom = true
+    }
+
+    private fun markPendingSending(tempId: Long) {
+        messages = messages.map { message ->
+            if (message.id == tempId) {
+                message.copy(localSendState = "sending", localError = "")
+            } else {
+                message
+            }
+        }
+    }
+
+    private fun markPendingFailed(tempId: Long, reason: String) {
+        messages = messages.map { message ->
+            if (message.id == tempId) {
+                message.copy(localSendState = "failed", localError = reason)
+            } else {
+                message
+            }
+        }
+    }
+
+    private fun pendingTextMessage(
+        tempId: Long,
+        peerUserId: Long,
+        content: String,
+        replyToMessageId: Long?,
+    ): DmMessageDto {
+        return DmMessageDto(
+            id = tempId,
+            senderId = -1L,
+            receiverId = peerUserId,
+            content = content,
+            type = "text",
+            replyToMessageId = replyToMessageId,
+            createdAt = currentUtcIso(),
+            localSendState = "sending",
+        )
+    }
+
+    private fun pendingAttachmentMessage(
+        tempId: Long,
+        peerUserId: Long,
+        attachment: PendingAttachment,
+        caption: String,
+        replyToMessageId: Long?,
+        mediaGroupId: String?,
+    ): DmMessageDto {
+        val isImage = attachment.kind == PendingAttachmentKind.Image
+        val localUri = attachment.uri.toString()
+
+        return DmMessageDto(
+            id = tempId,
+            senderId = -1L,
+            receiverId = peerUserId,
+            content = caption,
+            type = if (isImage) "image" else "file",
+            imageUrl = if (isImage) localUri else "",
+            fileUrl = if (isImage) "" else localUri,
+            fileName = attachment.fileName.orEmpty().ifBlank { if (isImage) "Изображение" else "Файл" },
+            fileSize = attachment.fileSize,
+            mediaGroupId = mediaGroupId.orEmpty(),
+            replyToMessageId = replyToMessageId,
+            createdAt = currentUtcIso(),
+            localSendState = "sending",
+            localMediaUri = localUri,
+            localMediaState = "uploading",
+        )
+    }
+
+    private fun allocatePendingMessageId(): Long {
+        val id = nextPendingMessageId
+        nextPendingMessageId -= 1L
+        return id
+    }
+
+    private fun orderedMessages(items: List<DmMessageDto>): List<DmMessageDto> {
+        return items.sortedWith(
+            compareBy<DmMessageDto> { it.id < 0 }
+                .thenBy { if (it.id < 0) -it.id else it.id }
+        )
+    }
+
+    private fun currentUtcIso(): String {
+        val formatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
+        formatter.timeZone = TimeZone.getTimeZone("UTC")
+        return formatter.format(Date())
     }
 
     private fun patchPoll(poll: PollDto) {
@@ -799,13 +1056,15 @@ class DmChatViewModel(
             encryptionVersion = optInt("encryptionVersion", 0),
             senderDeviceId = if (has("senderDeviceId") && !isNull("senderDeviceId")) optLong("senderDeviceId") else null,
             recipientDeviceId = if (has("recipientDeviceId") && !isNull("recipientDeviceId")) optLong("recipientDeviceId") else null,
-            encryptedAttachmentUrl = optString("encryptedAttachmentUrl"),
-            encryptedAttachmentFileName = optString("encryptedAttachmentFileName"),
+            encryptedAttachmentUrl = optNullableString("encryptedAttachmentUrl"),
+            encryptedAttachmentFileName = optNullableString("encryptedAttachmentFileName"),
             encryptedAttachmentFileSize = if (has("encryptedAttachmentFileSize") && !isNull("encryptedAttachmentFileSize")) optLong("encryptedAttachmentFileSize") else null,
-            encryptedAttachmentMimeType = optString("encryptedAttachmentMimeType"),
-            encryptedAttachmentKey = optString("encryptedAttachmentKey"),
-            encryptedAttachmentIv = optString("encryptedAttachmentIv"),
-            encryptedAttachmentKind = optString("encryptedAttachmentKind"),
+            encryptedAttachmentMimeType = optNullableString("encryptedAttachmentMimeType"),
+            encryptedAttachmentKey = optNullableString("encryptedAttachmentKey"),
+            encryptedAttachmentIv = optNullableString("encryptedAttachmentIv"),
+            encryptedAttachmentKind = optNullableString("encryptedAttachmentKind"),
+            encryptedAttachmentPreviewMimeType = optNullableString("encryptedAttachmentPreviewMimeType"),
+            encryptedAttachmentPreviewData = optNullableString("encryptedAttachmentPreviewData"),
             forwardedFromName = optString("forwardedFromName"),
             replyToMessageId = if (has("replyToMessageId") && !isNull("replyToMessageId")) optLong("replyToMessageId") else null,
             editedAt = optNullableString("editedAt"),
