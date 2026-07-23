@@ -1,3 +1,5 @@
+@file:Suppress("UNUSED_PARAMETER")
+
 package com.pulsemessenger.android.feature.chat
 
 import android.net.Uri
@@ -138,8 +140,8 @@ fun DmChatScreen(
     onSendPendingFile: () -> Unit,
     onBack: () -> Unit,
     onOpenSearch: () -> Unit,
-    onForwardSelected: (Set<Long>) -> Unit,
     onCallClick: () -> Unit = {},
+    onForwardSelected: (Set<Long>) -> Unit,
 ) {
     val listState = rememberLazyListState()
     var fullscreenImageModel by remember { mutableStateOf<Any?>(null) }
@@ -159,6 +161,10 @@ fun DmChatScreen(
     }
     LaunchedEffect(context, peer.id) {
         PulseNotificationStore.clear(context, "dm:${peer.id}")
+    }
+
+    LaunchedEffect(context, viewModel.messages) {
+        viewModel.preloadEncryptedImagePreviews(context)
     }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         uris.forEach { uri ->
@@ -480,10 +486,12 @@ fun DmChatScreen(
                             albumMessages = albumMessages,
                             isMine = currentUserId != null && message.senderId == currentUserId,
                             isEditing = viewModel.editingMessageId == message.id,
+                            encryptedImagePreviewUrl = viewModel.encryptedPreviewFor(message.id),
+                            isEncryptedImageAttachment = viewModel.isEncryptedImageAttachment(message),
                             onOpenImage = { selectedImage ->
                                 val images = viewModel.messages
                                     .filter { it.deletedAt == null && it.imageUrl.isNotBlank() }
-                                    .map { resolveBackendMediaUrl(it.imageUrl) as Any }
+                                    .map { resolveBackendMediaUrl(it.imageUrl) }
 
                                 val currentIndex = images.indexOf(selectedImage).takeIf { it >= 0 } ?: 0
 
@@ -492,7 +500,18 @@ fun DmChatScreen(
                                 fullscreenImageModel = selectedImage
                             },
                             onOpenVideo = { url -> fullscreenVideoUrl = url },
-                            onOpenFile = { fileUrl -> uriHandler.openUri(resolveBackendMediaUrl(fileUrl)) },
+                            onOpenFile = { fileMessage ->
+                                viewModel.openAttachment(
+                                    context = context,
+                                    message = fileMessage,
+                                    onOpenImage = { decryptedImageUri ->
+                                        fullscreenImageModels = listOf(decryptedImageUri)
+                                        fullscreenImageStartIndex = 0
+                                        fullscreenImageModel = decryptedImageUri
+                                    },
+                                    onOpenUrl = { url -> uriHandler.openUri(url) },
+                                )
+                            },
                             quickReactions = viewModel.quickReactions,
                             onToggleReaction = { emoji -> viewModel.toggleReaction(message.id, emoji) },
                             currentUserId = currentUserId,
@@ -557,7 +576,7 @@ fun DmChatScreen(
                 onOpenImage = { uri ->
                     val images = viewModel.pendingAttachments
                         .filter { it.kind == PendingAttachmentKind.Image }
-                        .map { it.uri as Any }
+                        .map { it.uri }
 
                     fullscreenImageModels = images
                     fullscreenImageStartIndex = images.indexOf(uri).takeIf { it >= 0 } ?: 0
@@ -855,9 +874,11 @@ private fun DmMessageBubble(
     albumMessages: List<DmMessageDto> = emptyList(),
     isMine: Boolean,
     isEditing: Boolean,
+    encryptedImagePreviewUrl: String? = null,
+    isEncryptedImageAttachment: Boolean = false,
     onOpenImage: (Any) -> Unit,
     onOpenVideo: (String) -> Unit,
-    onOpenFile: (String) -> Unit,
+    onOpenFile: (DmMessageDto) -> Unit,
     quickReactions: List<String>,
     onToggleReaction: (String) -> Unit,
     currentUserId: Long?,
@@ -1013,6 +1034,55 @@ private fun DmMessageBubble(
                                     }
                             )
                         }
+                        if (isEncryptedImageAttachment && message.deletedAt == null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            if (!encryptedImagePreviewUrl.isNullOrBlank()) {
+                                AsyncImage(
+                                    model = encryptedImagePreviewUrl,
+                                    contentDescription = "encrypted image",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 120.dp, max = 280.dp)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                        .clickable(enabled = !selectionMode) {
+                                            onOpenFile(message)
+                                        }
+                                )
+                            } else {
+                                Card(
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)
+                                    ),
+                                    shape = RoundedCornerShape(14.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 120.dp)
+                                        .clickable(enabled = !selectionMode) { onOpenFile(message) }
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(22.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            "Расшифровываем превью...",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
                         if (message.poll != null && message.deletedAt == null) {
                             Spacer(modifier = Modifier.height(8.dp))
                             PollCard(
@@ -1023,7 +1093,7 @@ private fun DmMessageBubble(
                                 onClose = { onClosePoll(message.poll.id) },
                             )
                         }
-                        if (message.fileUrl.isNotBlank() && message.deletedAt == null) {
+                        if (message.fileUrl.isNotBlank() && message.deletedAt == null && !isEncryptedImageAttachment) {
                             Spacer(modifier = Modifier.height(8.dp))
                             when {
                                 isVideoAttachment(message.fileName, resolvedFileUrl) -> VideoAttachmentCard(
@@ -1042,7 +1112,7 @@ private fun DmMessageBubble(
                                 else -> Card(
                                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)),
                                     shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.clickable(enabled = !selectionMode) { onOpenFile(message.fileUrl) }
+                                    modifier = Modifier.clickable(enabled = !selectionMode) { onOpenFile(message) }
                                 ) {
                                     Column(modifier = Modifier.padding(12.dp)) {
                                         Text(message.fileName.ifBlank { "Файл" }, fontWeight = FontWeight.SemiBold)

@@ -9,4 +9,12 @@
         name="updates"
         path="updates/" />
 
+    <cache-path
+        name="e2ee_decrypted"
+        path="e2ee_decrypted/" />
+
+    <cache-path
+        name="e2ee_thumbnails"
+        path="e2ee_thumbnails/" />
+
 </paths>

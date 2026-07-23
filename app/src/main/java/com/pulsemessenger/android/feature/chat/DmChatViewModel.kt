@@ -1,6 +1,8 @@
 package com.pulsemessenger.android.feature.chat
 
 import android.content.Context
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -18,6 +20,7 @@ import com.pulsemessenger.android.core.network.PendingAttachmentKind
 import com.pulsemessenger.android.core.network.SharedAttachmentDto
 import com.pulsemessenger.android.core.network.queryDisplayName
 import com.pulsemessenger.android.core.network.queryFileSize
+import com.pulsemessenger.android.ui.resolveBackendMediaUrl
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -33,6 +36,10 @@ class DmChatViewModel(
     var profileAttachments by mutableStateOf<List<SharedAttachmentDto>?>(null)
     var isProfileAttachmentsLoading by mutableStateOf(false)
     var profileAttachmentsError by mutableStateOf<String?>(null)
+    var encryptedImagePreviews by mutableStateOf<Map<Long, String>>(emptyMap())
+    var cachedEncryptedAttachments by mutableStateOf<Set<Long>>(emptySet())
+    private val encryptedImagePreviewJobs = mutableSetOf<Long>()
+    private val encryptedAttachmentPrefetchJobs = mutableSetOf<Long>()
     var isLoading by mutableStateOf(false)
     var isLoadingOlder by mutableStateOf(false)
     var hasMoreMessages by mutableStateOf(false)
@@ -89,6 +96,10 @@ class DmChatViewModel(
         profileAttachments = null
         profileAttachmentsError = null
         isProfileAttachmentsLoading = false
+        encryptedImagePreviews = emptyMap()
+        cachedEncryptedAttachments = emptySet()
+        encryptedImagePreviewJobs.clear()
+        encryptedAttachmentPrefetchJobs.clear()
         hasMoreMessages = false
         isLoadingOlder = false
         shouldScrollToBottom = true
@@ -113,6 +124,10 @@ class DmChatViewModel(
         profileAttachments = null
         profileAttachmentsError = null
         isProfileAttachmentsLoading = false
+        encryptedImagePreviews = emptyMap()
+        cachedEncryptedAttachments = emptySet()
+        encryptedImagePreviewJobs.clear()
+        encryptedAttachmentPrefetchJobs.clear()
         clearSelection()
         hasMoreMessages = false
         isLoadingOlder = false
@@ -490,6 +505,127 @@ class DmChatViewModel(
         sendMessage(context)
     }
 
+
+
+    fun preloadEncryptedImagePreviews(context: Context) {
+        messages
+            .filter { it.deletedAt == null }
+            .filter { repository.isEncryptedAttachment(it) }
+            .forEach { message -> ensureEncryptedAttachmentPrefetched(context, message) }
+    }
+
+    fun ensureEncryptedAttachmentPrefetched(context: Context, message: DmMessageDto) {
+        if (!repository.isEncryptedAttachment(message)) return
+
+        if (cachedEncryptedAttachments.contains(message.id) || repository.isDecryptedAttachmentCached(context, message)) {
+            cachedEncryptedAttachments = cachedEncryptedAttachments + message.id
+            if (repository.isEncryptedImageAttachment(message)) {
+                ensureEncryptedImagePreview(context, message)
+            }
+            return
+        }
+
+        if (!encryptedAttachmentPrefetchJobs.add(message.id)) return
+
+        viewModelScope.launch {
+            repository.prefetchEncryptedAttachment(context, message)
+                .onSuccess {
+                    cachedEncryptedAttachments = cachedEncryptedAttachments + message.id
+                    if (repository.isEncryptedImageAttachment(message)) {
+                        ensureEncryptedImagePreview(context, message)
+                    }
+                }
+                .onFailure {
+                    // Тихо игнорируем: вложение всё равно можно будет скачать по нажатию.
+                }
+
+            encryptedAttachmentPrefetchJobs.remove(message.id)
+        }
+    }
+
+    fun ensureEncryptedImagePreview(context: Context, message: DmMessageDto) {
+        if (!repository.isEncryptedImageAttachment(message)) return
+        if (encryptedImagePreviews.containsKey(message.id)) return
+        if (!encryptedImagePreviewJobs.add(message.id)) return
+
+        viewModelScope.launch {
+            repository.createEncryptedImagePreview(context, message)
+                .onSuccess { previewUri ->
+                    encryptedImagePreviews = encryptedImagePreviews + (message.id to previewUri)
+                }
+                .onFailure {
+                    // Не показываем ошибку в шапке чата: превью не критично, файл всё равно откроется по нажатию.
+                }
+
+            encryptedImagePreviewJobs.remove(message.id)
+        }
+    }
+
+    fun encryptedPreviewFor(messageId: Long): String? = encryptedImagePreviews[messageId]
+
+    fun isEncryptedImageAttachment(message: DmMessageDto): Boolean {
+        return repository.isEncryptedImageAttachment(message)
+    }
+
+    fun openAttachment(
+        context: Context,
+        message: DmMessageDto,
+        onOpenImage: (String) -> Unit,
+        onOpenUrl: (String) -> Unit,
+    ) {
+        if (!repository.isEncryptedAttachment(message)) {
+            if (message.fileUrl.isNotBlank()) {
+                onOpenUrl(resolveBackendMediaUrl(message.fileUrl))
+            }
+            return
+        }
+
+        repository.cachedDecryptedAttachment(context, message)?.let { opened ->
+            if (opened.kind == "image" || opened.mimeType.startsWith("image/")) {
+                onOpenImage(opened.uri.toString())
+                return
+            }
+
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(opened.uri, opened.mimeType)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+
+            try {
+                context.startActivity(Intent.createChooser(intent, opened.fileName))
+            } catch (error: ActivityNotFoundException) {
+                this@DmChatViewModel.error = "Нет приложения для открытия этого файла"
+            }
+            return
+        }
+
+        error = null
+        viewModelScope.launch {
+            repository.downloadAndDecryptAttachment(context, message)
+                .onSuccess { opened ->
+                    if (opened.kind == "image" || opened.mimeType.startsWith("image/")) {
+                        onOpenImage(opened.uri.toString())
+                        return@onSuccess
+                    }
+
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(opened.uri, opened.mimeType)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+
+                    try {
+                        context.startActivity(Intent.createChooser(intent, opened.fileName))
+                    } catch (error: ActivityNotFoundException) {
+                        this@DmChatViewModel.error = "Нет приложения для открытия этого файла"
+                    }
+                }
+                .onFailure {
+                    error = it.message ?: "Не удалось открыть зашифрованное вложение"
+                }
+        }
+    }
+
+
     private suspend fun sendAttachmentMessage(
         context: Context,
         peerUserId: Long,
@@ -500,43 +636,26 @@ class DmChatViewModel(
     ): Result<DmMessageDto> {
         return when (attachment.kind) {
             PendingAttachmentKind.Image -> {
-                repository.uploadImage(context, attachment.uri).fold(
-                    onSuccess = { imageUrl ->
-                        repository.sendMessage(
-                            peerUserId = peerUserId,
-                            content = caption,
-                            imageUrl = imageUrl,
-                            fileUrl = null,
-                            fileName = null,
-                            fileSize = null,
-                            replyToMessageId = replyToMessageId,
-                            mediaGroupId = mediaGroupId,
-                        )
-                    },
-                    onFailure = { error ->
-                        Result.failure(error)
-                    }
+                repository.sendEncryptedAttachment(
+                    peerUserId = peerUserId,
+                    context = context,
+                    uri = attachment.uri,
+                    attachmentKind = "image",
+                    caption = caption,
+                    replyToMessageId = replyToMessageId,
+                    mediaGroupId = mediaGroupId,
                 )
             }
 
             PendingAttachmentKind.File -> {
-                repository.uploadFile(context, attachment.uri).fold(
-                    onSuccess = { uploaded ->
-                        val (fileUrl, fileName, fileSize) = uploaded
-
-                        repository.sendMessage(
-                            peerUserId = peerUserId,
-                            content = caption,
-                            imageUrl = null,
-                            fileUrl = fileUrl,
-                            fileName = fileName,
-                            fileSize = fileSize,
-                            replyToMessageId = replyToMessageId,
-                        )
-                    },
-                    onFailure = { error ->
-                        Result.failure(error)
-                    }
+                repository.sendEncryptedAttachment(
+                    peerUserId = peerUserId,
+                    context = context,
+                    uri = attachment.uri,
+                    attachmentKind = "file",
+                    caption = caption,
+                    replyToMessageId = replyToMessageId,
+                    mediaGroupId = mediaGroupId,
                 )
             }
         }
@@ -604,6 +723,8 @@ class DmChatViewModel(
         error = null
         editingMessageId = null
         pendingAttachments = emptyList()
+        encryptedImagePreviews = emptyMap()
+        encryptedImagePreviewJobs.clear()
         isPeerTyping = false
     }
 
@@ -626,7 +747,7 @@ class DmChatViewModel(
         }
     }
 
-    fun parseRealtimeMessage(payload: JSONObject): DmMessageDto = payload.toDmMessageDto()
+    fun parseRealtimeMessage(payload: JSONObject): DmMessageDto = repository.decryptMessage(payload.toDmMessageDto())
 
     private fun upsertMessage(message: DmMessageDto) {
         val existed = messages.any { it.id == message.id }
@@ -673,6 +794,18 @@ class DmChatViewModel(
             fileName = optString("fileName"),
             fileSize = if (has("fileSize") && !isNull("fileSize")) optLong("fileSize") else null,
             mediaGroupId = optString("mediaGroupId"),
+            encryptedPayload = optString("encryptedPayload"),
+            encryptedHeader = optString("encryptedHeader"),
+            encryptionVersion = optInt("encryptionVersion", 0),
+            senderDeviceId = if (has("senderDeviceId") && !isNull("senderDeviceId")) optLong("senderDeviceId") else null,
+            recipientDeviceId = if (has("recipientDeviceId") && !isNull("recipientDeviceId")) optLong("recipientDeviceId") else null,
+            encryptedAttachmentUrl = optString("encryptedAttachmentUrl"),
+            encryptedAttachmentFileName = optString("encryptedAttachmentFileName"),
+            encryptedAttachmentFileSize = if (has("encryptedAttachmentFileSize") && !isNull("encryptedAttachmentFileSize")) optLong("encryptedAttachmentFileSize") else null,
+            encryptedAttachmentMimeType = optString("encryptedAttachmentMimeType"),
+            encryptedAttachmentKey = optString("encryptedAttachmentKey"),
+            encryptedAttachmentIv = optString("encryptedAttachmentIv"),
+            encryptedAttachmentKind = optString("encryptedAttachmentKind"),
             forwardedFromName = optString("forwardedFromName"),
             replyToMessageId = if (has("replyToMessageId") && !isNull("replyToMessageId")) optLong("replyToMessageId") else null,
             editedAt = optNullableString("editedAt"),
@@ -690,8 +823,8 @@ class DmChatViewModel(
     private fun JSONObject.optReactions(): List<com.pulsemessenger.android.core.network.MessageReactionDto> {
         val raw = optJSONArray("reactions") ?: return emptyList()
         return List(raw.length()) { index -> raw.optJSONObject(index) }
-            .mapNotNull { item ->
-                item ?: return@mapNotNull null
+            .mapNotNull reactionsMap@{ item ->
+                item ?: return@reactionsMap null
                 com.pulsemessenger.android.core.network.MessageReactionDto(
                     emoji = item.optString("emoji"),
                     count = item.optInt("count", 0),
@@ -711,15 +844,15 @@ class DmChatViewModel(
             emptyList()
         } else {
             List(optionsRaw.length()) { index -> optionsRaw.optJSONObject(index) }
-                .mapNotNull { option ->
-                    option ?: return@mapNotNull null
+                .mapNotNull optionsMap@{ option ->
+                    option ?: return@optionsMap null
                     val votersRaw = option.optJSONArray("voters")
                     val voters = if (votersRaw == null) {
                         emptyList()
                     } else {
                         List(votersRaw.length()) { idx -> votersRaw.optJSONObject(idx) }
-                            .mapNotNull { voter ->
-                                voter ?: return@mapNotNull null
+                            .mapNotNull votersMap@{ voter ->
+                                voter ?: return@votersMap null
                                 PollVoterDto(
                                     id = voter.optLong("id"),
                                     username = voter.optString("username"),

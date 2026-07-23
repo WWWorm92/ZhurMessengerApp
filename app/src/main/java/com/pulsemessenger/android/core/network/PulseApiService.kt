@@ -11,7 +11,10 @@ import retrofit2.http.Path
 import retrofit2.http.POST
 import retrofit2.http.Part
 import okhttp3.MultipartBody
+import okhttp3.ResponseBody
 import retrofit2.http.Query
+import retrofit2.http.Streaming
+import retrofit2.http.Url
 
 interface PulseApiService {
     @POST("/api/auth/register")
@@ -201,6 +204,21 @@ interface PulseApiService {
         @Header("Authorization") authorization: String,
         @Part file: MultipartBody.Part,
     ): Response<UploadFileResponse>
+
+    @Multipart
+    @POST("/api/uploads/encrypted-message-file")
+    suspend fun uploadEncryptedMessageFile(
+        @Header("Authorization") authorization: String,
+        @Part file: MultipartBody.Part,
+    ): Response<UploadFileResponse>
+
+
+    @Streaming
+    @GET
+    suspend fun downloadMedia(
+        @Header("Authorization") authorization: String,
+        @Url url: String,
+    ): Response<ResponseBody>
 
     @PATCH("/api/profile")
     suspend fun updateProfile(
@@ -400,4 +418,34 @@ interface PulseApiService {
         @Header("Authorization") authorization: String,
         @Path("userId") userId: Long,
     ): Response<GenericOkResponse>
+
+    @GET("/api/e2ee/status")
+    suspend fun e2eeStatus(
+        @Header("Authorization") authorization: String,
+    ): Response<E2EEStatusResponse>
+
+    @POST("/api/e2ee/device-keys")
+    suspend fun registerE2EEDeviceKeys(
+        @Header("Authorization") authorization: String,
+        @Body body: E2EERegisterDeviceKeysRequest,
+    ): Response<E2EEDeviceKeysResponse>
+
+    @POST("/api/e2ee/one-time-prekeys")
+    suspend fun uploadE2EEOneTimePreKeys(
+        @Header("Authorization") authorization: String,
+        @Body body: E2EEUploadOneTimePreKeysRequest,
+    ): Response<E2EEDeviceKeysResponse>
+
+    @GET("/api/e2ee/users/{userId}/status")
+    suspend fun e2eePeerStatus(
+        @Header("Authorization") authorization: String,
+        @Path("userId") userId: Long,
+    ): Response<E2EEPeerStatusResponse>
+
+    @GET("/api/e2ee/users/{userId}/bundle")
+    suspend fun e2eePreKeyBundle(
+        @Header("Authorization") authorization: String,
+        @Path("userId") userId: Long,
+    ): Response<E2EEPreKeyBundleResponse>
+
 }

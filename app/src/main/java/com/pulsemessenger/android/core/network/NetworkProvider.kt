@@ -7,6 +7,7 @@ import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.pulsemessenger.android.BuildConfig
 import com.pulsemessenger.android.core.session.SessionStore
+import com.pulsemessenger.android.core.privacy.SecurePrefs
 import okhttp3.Authenticator
 import okhttp3.Cookie
 import okhttp3.CookieJar
@@ -38,17 +39,26 @@ class NetworkProvider(context: Context, private val sessionStore: SessionStore) 
         val persistent: Boolean,
     )
 
-    private val prefs = context.getSharedPreferences("pulse_cookies", Context.MODE_PRIVATE)
+    private val securePrefs = SecurePrefs(context, "pulse_cookies_secure")
+    private val legacyPrefs = context.getSharedPreferences("pulse_cookies", Context.MODE_PRIVATE)
     private val gson: Gson = GsonBuilder().create()
     private val refreshLock = Any()
     private val cookieType = object : TypeToken<List<StoredCookie>>() {}.type
+
+    init {
+        migrateLegacyCookies()
+    }
 
     @Volatile
     var lastRefreshNetworkError: Boolean = false
         private set
 
     private val logging = HttpLoggingInterceptor().apply {
-        level = HttpLoggingInterceptor.Level.BASIC
+        level = if (BuildConfig.DEBUG) {
+            HttpLoggingInterceptor.Level.BASIC
+        } else {
+            HttpLoggingInterceptor.Level.NONE
+        }
     }
 
     private val cookieJar = object : CookieJar {
@@ -187,7 +197,7 @@ class NetworkProvider(context: Context, private val sessionStore: SessionStore) 
             response.use {
                 val body = it.body?.string().orEmpty()
 
-                Log.d("AUTH", "refresh status=${it.code} body=$body")
+                Log.d("AUTH", "refresh status=${it.code}")
 
                 if (!it.isSuccessful) {
                     return null
@@ -219,12 +229,20 @@ class NetworkProvider(context: Context, private val sessionStore: SessionStore) 
     }
 
     private fun readCookies(): List<StoredCookie> {
-        val raw = prefs.getString("cookies", null).orEmpty()
+        val raw = securePrefs.getString("cookies", "")
         if (raw.isBlank()) return emptyList()
         return runCatching { gson.fromJson<List<StoredCookie>>(raw, cookieType) }.getOrNull().orEmpty()
     }
 
     private fun writeCookies(cookies: List<StoredCookie>) {
-        prefs.edit { putString("cookies", gson.toJson(cookies, cookieType)) }
+        securePrefs.putString("cookies", gson.toJson(cookies, cookieType))
+    }
+
+    private fun migrateLegacyCookies() {
+        val legacyCookies = legacyPrefs.getString("cookies", "").orEmpty()
+        if (legacyCookies.isNotBlank() && securePrefs.getString("cookies", "").isBlank()) {
+            securePrefs.putString("cookies", legacyCookies)
+        }
+        legacyPrefs.edit { remove("cookies") }
     }
 }

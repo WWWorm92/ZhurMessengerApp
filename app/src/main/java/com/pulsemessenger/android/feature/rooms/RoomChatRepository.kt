@@ -50,7 +50,7 @@ class RoomChatRepository(
 
             if (!response.isSuccessful) {
                 val errorBody = response.errorBody()?.string().orEmpty()
-                val parsed = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
+                val parsed: ErrorResponse? = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
                 return Result.failure(IllegalStateException(parsed?.error ?: "Failed to load room messages"))
             }
 
@@ -108,7 +108,7 @@ class RoomChatRepository(
         )
         if (!response.isSuccessful) {
             val errorBody = response.errorBody()?.string().orEmpty()
-            val parsed = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
+            val parsed: ErrorResponse? = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
             return Result.failure(IllegalStateException(parsed?.error ?: "Failed to send room message"))
         }
         return Result.success(response.body()?.message ?: return Result.failure(IllegalStateException("Empty room message response")))
@@ -128,7 +128,7 @@ class RoomChatRepository(
 
             if (!response.isSuccessful) {
                 val errorBody = response.errorBody()?.string().orEmpty()
-                val parsed = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
+                val parsed: ErrorResponse? = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
                 return Result.failure(IllegalStateException(parsed?.error ?: "Failed to load room attachments"))
             }
 
@@ -148,7 +148,7 @@ class RoomChatRepository(
         val response = networkProvider.api.uploadMessageImage("Bearer $token", imagePart)
         if (!response.isSuccessful) {
             val errorBody = response.errorBody()?.string().orEmpty()
-            val parsed = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
+            val parsed: ErrorResponse? = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
             return Result.failure(IllegalStateException(parsed?.error ?: "Failed to upload image"))
         }
         return Result.success(response.body()?.imageUrl ?: return Result.failure(IllegalStateException("Empty upload response")))
@@ -164,7 +164,7 @@ class RoomChatRepository(
         val response = networkProvider.api.uploadMessageFile("Bearer $token", filePart)
         if (!response.isSuccessful) {
             val errorBody = response.errorBody()?.string().orEmpty()
-            val parsed = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
+            val parsed: ErrorResponse? = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
             return Result.failure(IllegalStateException(parsed?.error ?: "Failed to upload file"))
         }
         val body = response.body() ?: return Result.failure(IllegalStateException("Empty upload response"))
@@ -184,7 +184,7 @@ class RoomChatRepository(
         )
         if (!response.isSuccessful) {
             val errorBody = response.errorBody()?.string().orEmpty()
-            val parsed = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
+            val parsed: ErrorResponse? = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
             return Result.failure(IllegalStateException(parsed?.error ?: "Failed to edit room message"))
         }
         return Result.success(response.body()?.message ?: return Result.failure(IllegalStateException("Empty room message response")))
@@ -202,7 +202,7 @@ class RoomChatRepository(
         )
         if (!response.isSuccessful) {
             val errorBody = response.errorBody()?.string().orEmpty()
-            val parsed = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
+            val parsed: ErrorResponse? = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
             return Result.failure(IllegalStateException(parsed?.error ?: "Failed to delete room message"))
         }
         return Result.success(response.body()?.message ?: return Result.failure(IllegalStateException("Empty room message response")))
@@ -221,7 +221,7 @@ class RoomChatRepository(
         )
         if (!response.isSuccessful) {
             val errorBody = response.errorBody()?.string().orEmpty()
-            val parsed = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
+            val parsed: ErrorResponse? = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
             return Result.failure(IllegalStateException(parsed?.error ?: "Failed to toggle reaction"))
         }
         return Result.success(response.body()?.message ?: return Result.failure(IllegalStateException("Empty room message response")))
@@ -246,7 +246,7 @@ class RoomChatRepository(
         )
         if (!response.isSuccessful) {
             val errorBody = response.errorBody()?.string().orEmpty()
-            val parsed = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
+            val parsed: ErrorResponse? = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
             return Result.failure(IllegalStateException(parsed?.error ?: "Failed to vote poll"))
         }
         return Result.success(response.body()?.poll ?: return Result.failure(IllegalStateException("Empty poll response")))
@@ -263,7 +263,7 @@ class RoomChatRepository(
         )
         if (!response.isSuccessful) {
             val errorBody = response.errorBody()?.string().orEmpty()
-            val parsed = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
+            val parsed: ErrorResponse? = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
             return Result.failure(IllegalStateException(parsed?.error ?: "Failed to close poll"))
         }
         return Result.success(response.body()?.poll ?: return Result.failure(IllegalStateException("Empty poll response")))
@@ -275,7 +275,7 @@ class RoomChatRepository(
         val response = networkProvider.api.pinMessage("Bearer $token", PinMessageRequest(scope = "room", targetId = roomId, messageId = messageId))
         if (!response.isSuccessful) {
             val errorBody = response.errorBody()?.string().orEmpty()
-            val parsed = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
+            val parsed: ErrorResponse? = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
             return Result.failure(IllegalStateException(parsed?.error ?: "Failed to pin message"))
         }
         return Result.success(Unit)
@@ -287,7 +287,7 @@ class RoomChatRepository(
         val response = networkProvider.api.unpinMessage("Bearer $token", UnpinRequest(scope = "room", targetId = roomId))
         if (!response.isSuccessful) {
             val errorBody = response.errorBody()?.string().orEmpty()
-            val parsed = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
+            val parsed: ErrorResponse? = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
             return Result.failure(IllegalStateException(parsed?.error ?: "Failed to unpin message"))
         }
         return Result.success(Unit)

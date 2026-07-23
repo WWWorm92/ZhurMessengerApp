@@ -87,6 +87,18 @@ data class DmMessageDto(
     val fileName: String = "",
     val fileSize: Long? = null,
     val mediaGroupId: String = "",
+    val encryptedPayload: String = "",
+    val encryptedHeader: String = "",
+    val encryptionVersion: Int = 0,
+    val senderDeviceId: Long? = null,
+    val recipientDeviceId: Long? = null,
+    val encryptedAttachmentUrl: String = "",
+    val encryptedAttachmentFileName: String = "",
+    val encryptedAttachmentFileSize: Long? = null,
+    val encryptedAttachmentMimeType: String = "",
+    val encryptedAttachmentKey: String = "",
+    val encryptedAttachmentIv: String = "",
+    val encryptedAttachmentKind: String = "",
     val forwardedFromName: String = "",
     val replyToMessageId: Long? = null,
     val editedAt: String? = null,
@@ -129,6 +141,13 @@ data class SendMessageRequest(
     val fileName: String? = null,
     val fileSize: Long? = null,
     val mediaGroupId: String? = null,
+    val encryptedPayload: String? = null,
+    val encryptedHeader: String? = null,
+    val encryptionVersion: Int? = null,
+    val recipientDeviceId: Long? = null,
+    val notificationPreview: String? = null,
+    val notificationPreviewEncryptedPayload: String? = null,
+    val notificationPreviewEncryptedHeader: String? = null,
     val poll: PollCreationRequest? = null,
     val forwardedFromName: String? = null,
 )
@@ -503,4 +522,56 @@ data class MemberActionRequest(
     val role: String? = null,
     val isMuted: Boolean? = null,
     val canPostMedia: Boolean? = null,
+)
+
+
+data class E2EEOneTimePreKeyDto(
+    val preKeyId: Int = 0,
+    val preKeyPublic: String = "",
+)
+
+data class E2EERegisterDeviceKeysRequest(
+    val registrationId: Int,
+    val identityKeyPublic: String,
+    val signedPreKeyId: Int,
+    val signedPreKeyPublic: String,
+    val signedPreKeySignature: String,
+    val oneTimePreKeys: List<E2EEOneTimePreKeyDto> = emptyList(),
+)
+
+data class E2EEUploadOneTimePreKeysRequest(
+    val oneTimePreKeys: List<E2EEOneTimePreKeyDto> = emptyList(),
+)
+
+data class E2EEDeviceKeysResponse(
+    val ok: Boolean = false,
+    val deviceId: Long? = null,
+    val uploadedPreKeys: Int = 0,
+)
+
+data class E2EEStatusResponse(
+    val deviceId: Long? = null,
+    val hasDeviceKeys: Boolean = false,
+    val oneTimePreKeyCount: Int = 0,
+)
+
+data class E2EEPeerStatusResponse(
+    val userId: Long = 0,
+    val hasDeviceKeys: Boolean = false,
+    val deviceCount: Int = 0,
+)
+
+data class E2EEPreKeyBundleDto(
+    val userId: Long = 0,
+    val deviceId: Long = 0,
+    val registrationId: Int = 0,
+    val identityKeyPublic: String = "",
+    val signedPreKeyId: Int = 0,
+    val signedPreKeyPublic: String = "",
+    val signedPreKeySignature: String = "",
+    val oneTimePreKey: E2EEOneTimePreKeyDto? = null,
+)
+
+data class E2EEPreKeyBundleResponse(
+    val bundle: E2EEPreKeyBundleDto? = null,
 )
