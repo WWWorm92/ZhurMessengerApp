@@ -29,7 +29,7 @@ class CallForegroundService : Service() {
         val peerName = intent?.getStringExtra(EXTRA_PEER_NAME).orEmpty().ifBlank { "Pulse" }
         val status = intent?.getStringExtra(EXTRA_STATUS).orEmpty().ifBlank { "Звонок активен" }
 
-        CallNotificationHelper.createCallChannelIfNeeded(this)
+        CallNotificationHelper.createActiveCallChannelIfNeeded(this)
 
         startForeground(
             PulseNotificationStore.ACTIVE_CALL_NOTIFICATION_ID,
@@ -41,6 +41,7 @@ class CallForegroundService : Service() {
 
     private fun buildNotification(peerName: String, status: String): android.app.Notification {
         val openIntent = Intent(this, MainActivity::class.java).apply {
+            action = MainActivity.ACTION_CALL_SHOW_CURRENT
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
 
@@ -64,7 +65,7 @@ class CallForegroundService : Service() {
 
         val largeIcon = BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher)
 
-        return NotificationCompat.Builder(this, PulseNotificationStore.CALL_CHANNEL_ID)
+        return NotificationCompat.Builder(this, PulseNotificationStore.ACTIVE_CALL_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher_round)
             .setLargeIcon(largeIcon)
             .setContentTitle("Звонок с $peerName")
@@ -76,6 +77,8 @@ class CallForegroundService : Service() {
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setVibrate(null)
             .addAction(R.mipmap.ic_launcher_round, "Завершить", endPendingIntent)
             .build()
     }

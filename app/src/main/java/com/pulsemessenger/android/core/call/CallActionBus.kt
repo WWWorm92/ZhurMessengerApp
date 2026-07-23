@@ -8,12 +8,14 @@ sealed class CallNotificationAction {
         val callId: String,
         val peerUserId: Long,
         val peerName: String,
+        val peerAvatarUrl: String = "",
     ) : CallNotificationAction()
 
     data class Accept(
         val callId: String,
         val peerUserId: Long,
         val peerName: String,
+        val peerAvatarUrl: String = "",
     ) : CallNotificationAction()
 
     data class Reject(
@@ -22,6 +24,8 @@ sealed class CallNotificationAction {
     ) : CallNotificationAction()
 
     data object EndCurrent : CallNotificationAction()
+
+    data object OpenCurrent : CallNotificationAction()
 }
 
 object CallActionBus {

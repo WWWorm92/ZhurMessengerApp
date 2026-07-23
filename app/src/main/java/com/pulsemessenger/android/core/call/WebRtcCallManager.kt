@@ -37,7 +37,7 @@ class WebRtcCallManager(
 
     private val pendingRemoteIce = mutableListOf<CallIcePayload>()
     private var remoteDescriptionSet = false
-    private var speakerEnabled = true
+    private var speakerEnabled = false
 
     var onIceCandidate: ((CallIcePayload) -> Unit)? = null
     var onStatusChanged: ((String) -> Unit)? = null
@@ -270,7 +270,7 @@ class WebRtcCallManager(
             audioManager?.mode = AudioManager.MODE_NORMAL
             audioManager?.isSpeakerphoneOn = false
             audioManager = null
-            speakerEnabled = true
+            speakerEnabled = false
         }
 
         pendingRemoteIce.clear()

@@ -8,7 +8,8 @@ import org.json.JSONArray
 object PulseNotificationStore {
     private const val PREFS_NAME = "pulse_push_notifications"
     const val CHANNEL_ID = "pulse_messages"
-    const val CALL_CHANNEL_ID = "pulse_calls"
+    const val CALL_CHANNEL_ID = "pulse_calls_v2"
+    const val ACTIVE_CALL_CHANNEL_ID = "pulse_active_call"
     const val ACTIVE_CALL_NOTIFICATION_ID = 920_001
 
     fun notificationId(chatKey: String): Int {

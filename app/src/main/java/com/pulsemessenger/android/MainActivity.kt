@@ -32,6 +32,7 @@ class MainActivity : ComponentActivity() {
         val callId = intent.getStringExtra(EXTRA_CALL_ID).orEmpty()
         val peerUserId = intent.getLongExtra(EXTRA_PEER_USER_ID, 0L)
         val peerName = intent.getStringExtra(EXTRA_PEER_NAME).orEmpty().ifBlank { "Pulse" }
+        val peerAvatarUrl = intent.getStringExtra(EXTRA_PEER_AVATAR_URL).orEmpty()
 
         when (action) {
             ACTION_CALL_OPEN -> {
@@ -41,6 +42,7 @@ class MainActivity : ComponentActivity() {
                             callId = callId,
                             peerUserId = peerUserId,
                             peerName = peerName,
+                            peerAvatarUrl = peerAvatarUrl,
                         )
                     )
                 }
@@ -53,6 +55,7 @@ class MainActivity : ComponentActivity() {
                             callId = callId,
                             peerUserId = peerUserId,
                             peerName = peerName,
+                            peerAvatarUrl = peerAvatarUrl,
                         )
                     )
                 }
@@ -72,6 +75,10 @@ class MainActivity : ComponentActivity() {
             ACTION_CALL_END -> {
                 CallActionBus.publish(CallNotificationAction.EndCurrent)
             }
+
+            ACTION_CALL_SHOW_CURRENT -> {
+                CallActionBus.publish(CallNotificationAction.OpenCurrent)
+            }
         }
     }
 
@@ -80,9 +87,11 @@ class MainActivity : ComponentActivity() {
         const val ACTION_CALL_ACCEPT = "com.pulsemessenger.android.action.CALL_ACCEPT"
         const val ACTION_CALL_REJECT = "com.pulsemessenger.android.action.CALL_REJECT"
         const val ACTION_CALL_END = "com.pulsemessenger.android.action.CALL_END"
+        const val ACTION_CALL_SHOW_CURRENT = "com.pulsemessenger.android.action.CALL_SHOW_CURRENT"
 
         const val EXTRA_CALL_ID = "call_id"
         const val EXTRA_PEER_USER_ID = "peer_user_id"
         const val EXTRA_PEER_NAME = "peer_name"
+        const val EXTRA_PEER_AVATAR_URL = "peer_avatar_url"
     }
 }

@@ -52,12 +52,15 @@ class FCMService : FirebaseMessagingService() {
         val fromName = data["fromName"].orEmpty()
             .ifBlank { data["senderName"].orEmpty() }
             .ifBlank { "Pulse" }
+        val fromAvatarUrl = data["fromAvatarUrl"].orEmpty()
+            .ifBlank { data["avatarUrl"].orEmpty() }
 
         CallNotificationHelper.showIncomingCall(
             context = this,
             callId = callId,
             fromUserId = fromUserId,
             fromName = fromName,
+            fromAvatarUrl = fromAvatarUrl,
         )
     }
 

@@ -17,12 +17,14 @@ import com.pulsemessenger.android.R
 import com.pulsemessenger.android.core.notification.PulseNotificationStore
 
 object CallNotificationHelper {
+    private val INCOMING_CALL_VIBRATION = longArrayOf(0, 900, 450, 900, 450, 900)
 
     fun showIncomingCall(
         context: Context,
         callId: String,
         fromUserId: Long,
         fromName: String,
+        fromAvatarUrl: String = "",
     ) {
         if (callId.isBlank() || fromUserId <= 0L) return
 
@@ -43,6 +45,7 @@ object CallNotificationHelper {
             putExtra(MainActivity.EXTRA_CALL_ID, callId)
             putExtra(MainActivity.EXTRA_PEER_USER_ID, fromUserId)
             putExtra(MainActivity.EXTRA_PEER_NAME, fromName)
+            putExtra(MainActivity.EXTRA_PEER_AVATAR_URL, fromAvatarUrl)
         }
 
         val acceptIntent = Intent(context, CallNotificationReceiver::class.java).apply {
@@ -50,6 +53,7 @@ object CallNotificationHelper {
             putExtra(MainActivity.EXTRA_CALL_ID, callId)
             putExtra(MainActivity.EXTRA_PEER_USER_ID, fromUserId)
             putExtra(MainActivity.EXTRA_PEER_NAME, fromName)
+            putExtra(MainActivity.EXTRA_PEER_AVATAR_URL, fromAvatarUrl)
         }
 
         val rejectIntent = Intent(context, CallNotificationReceiver::class.java).apply {
@@ -57,6 +61,7 @@ object CallNotificationHelper {
             putExtra(MainActivity.EXTRA_CALL_ID, callId)
             putExtra(MainActivity.EXTRA_PEER_USER_ID, fromUserId)
             putExtra(MainActivity.EXTRA_PEER_NAME, fromName)
+            putExtra(MainActivity.EXTRA_PEER_AVATAR_URL, fromAvatarUrl)
         }
 
         val openPendingIntent = PendingIntent.getActivity(
@@ -92,7 +97,8 @@ object CallNotificationHelper {
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setDefaults(NotificationCompat.DEFAULT_LIGHTS or NotificationCompat.DEFAULT_SOUND)
+            .setVibrate(INCOMING_CALL_VIBRATION)
             .setAutoCancel(false)
             .setOngoing(true)
             .setTimeoutAfter(60_000L)
@@ -114,11 +120,29 @@ object CallNotificationHelper {
         val manager = context.getSystemService(NotificationManager::class.java)
         val channel = NotificationChannel(
             PulseNotificationStore.CALL_CHANNEL_ID,
-            "Звонки",
+            "Входящие звонки",
             NotificationManager.IMPORTANCE_HIGH,
         ).apply {
-            description = "Уведомления о входящих и активных звонках"
+            description = "Уведомления о входящих звонках"
             enableVibration(true)
+            vibrationPattern = INCOMING_CALL_VIBRATION
+        }
+
+        manager.createNotificationChannel(channel)
+    }
+
+    fun createActiveCallChannelIfNeeded(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+
+        val manager = context.getSystemService(NotificationManager::class.java)
+        val channel = NotificationChannel(
+            PulseNotificationStore.ACTIVE_CALL_CHANNEL_ID,
+            "Активный звонок",
+            NotificationManager.IMPORTANCE_LOW,
+        ).apply {
+            description = "Тихое уведомление во время активного звонка"
+            enableVibration(false)
+            setSound(null, null)
         }
 
         manager.createNotificationChannel(channel)

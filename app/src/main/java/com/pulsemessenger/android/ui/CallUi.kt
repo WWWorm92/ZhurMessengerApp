@@ -1,16 +1,20 @@
 package com.pulsemessenger.android.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
@@ -23,45 +27,63 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.delay
+import androidx.compose.ui.zIndex
+import coil.compose.AsyncImage
+import com.pulsemessenger.android.BuildConfig
+
+private val PulseCallGreen = Color(0xFF16A34A)
+private val PulseCallRed = Color(0xFFEF4444)
+private val PulseCallBlue = Color(0xFF0EA5E9)
+private val PulseCallDeepBlue = Color(0xFF075985)
+private val PulseCallDark = Color(0xFF07111F)
 
 @Composable
 fun IncomingCallOverlay(
     callerName: String,
+    callerAvatarUrl: String = "",
     onAccept: () -> Unit,
     onReject: () -> Unit,
 ) {
     Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.74f),
+        modifier = Modifier
+            .fillMaxSize()
+            .zIndex(30f),
+        color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.78f),
     ) {
         Box(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .background(CallBackgroundBrush()),
             contentAlignment = Alignment.Center,
         ) {
             Column(
-                modifier = Modifier.padding(horizontal = 28.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 28.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                CallAvatar(name = callerName)
+                CallAvatar(
+                    name = callerName,
+                    avatarUrl = callerAvatarUrl,
+                    size = 124,
+                )
 
-                Spacer(modifier = Modifier.height(28.dp))
+                Spacer(modifier = Modifier.height(30.dp))
 
                 Text(
                     text = callerName,
@@ -76,36 +98,30 @@ fun IncomingCallOverlay(
                 Text(
                     text = "Входящий звонок",
                     style = MaterialTheme.typography.titleMedium,
-                    color = Color.White.copy(alpha = 0.76f),
+                    color = Color.White.copy(alpha = 0.78f),
                     textAlign = TextAlign.Center,
                 )
 
-                Spacer(modifier = Modifier.height(54.dp))
+                Spacer(modifier = Modifier.height(58.dp))
 
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(54.dp),
+                    horizontalArrangement = Arrangement.spacedBy(62.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        FilledIconButton(
-                            onClick = onReject,
-                            modifier = Modifier.size(68.dp),
-                        ) {
-                            Icon(Icons.Default.CallEnd, contentDescription = "Отклонить")
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("Отклонить", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.84f))
+                    CallAnswerButton(
+                        label = "Отклонить",
+                        color = PulseCallRed,
+                        onClick = onReject,
+                    ) {
+                        Icon(Icons.Default.CallEnd, contentDescription = "Отклонить")
                     }
 
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        FilledIconButton(
-                            onClick = onAccept,
-                            modifier = Modifier.size(68.dp),
-                        ) {
-                            Icon(Icons.Default.Call, contentDescription = "Принять")
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("Принять", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.84f))
+                    CallAnswerButton(
+                        label = "Ответить",
+                        color = PulseCallGreen,
+                        onClick = onAccept,
+                    ) {
+                        Icon(Icons.Default.Call, contentDescription = "Ответить")
                     }
                 }
             }
@@ -114,39 +130,62 @@ fun IncomingCallOverlay(
 }
 
 @Composable
-fun ActiveCallOverlay(
+fun ActiveCallWindow(
     peerName: String,
+    peerAvatarUrl: String = "",
     statusText: String,
+    durationSeconds: Int,
     muted: Boolean,
     speakerEnabled: Boolean,
+    onBackToDialog: () -> Unit,
     onToggleMute: () -> Unit,
     onToggleSpeaker: () -> Unit,
     onEnd: () -> Unit,
 ) {
-    var activeSeconds by remember(statusText) { mutableIntStateOf(0) }
-    val isActive = statusText.contains("актив", ignoreCase = true)
-
-    LaunchedEffect(isActive) {
-        activeSeconds = 0
-        while (isActive) {
-            delay(1000)
-            activeSeconds += 1
-        }
-    }
+    BackHandler(onBack = onBackToDialog)
 
     Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.78f),
+        modifier = Modifier
+            .fillMaxSize()
+            .zIndex(20f),
+        color = MaterialTheme.colorScheme.background,
     ) {
         Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .fillMaxSize()
+                .background(CallBackgroundBrush()),
         ) {
             Column(
-                modifier = Modifier.padding(horizontal = 24.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 22.dp, vertical = 18.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                CallAvatar(name = peerName)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = onBackToDialog) {
+                        Text("← В диалог", color = Color.White)
+                    }
+
+                    Spacer(modifier = Modifier.weight(1f))
+
+                    Text(
+                        text = if (durationSeconds > 0) formatCallDuration(durationSeconds) else "--:--",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White.copy(alpha = 0.92f),
+                    )
+                }
+
+                Spacer(modifier = Modifier.weight(0.7f))
+
+                CallAvatar(
+                    name = peerName,
+                    avatarUrl = peerAvatarUrl,
+                    size = 132,
+                )
 
                 Spacer(modifier = Modifier.height(28.dp))
 
@@ -158,34 +197,35 @@ fun ActiveCallOverlay(
                     textAlign = TextAlign.Center,
                 )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
                 Text(
-                    text = if (isActive && activeSeconds > 0) {
-                        "${formatCallDuration(activeSeconds)} • $statusText"
-                    } else {
-                        statusText
-                    },
+                    text = statusText,
                     style = MaterialTheme.typography.titleMedium,
-                    color = Color.White.copy(alpha = 0.76f),
+                    color = Color.White.copy(alpha = 0.78f),
                     textAlign = TextAlign.Center,
                 )
 
-                Spacer(modifier = Modifier.height(44.dp))
+                Spacer(modifier = Modifier.weight(1f))
 
                 Card(
-                    shape = MaterialTheme.shapes.extraLarge,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(34.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
                     ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 12.dp),
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 22.dp, vertical = 18.dp),
-                        horizontalArrangement = Arrangement.spacedBy(20.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 18.dp, vertical = 18.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         CallControlButton(
-                            label = if (muted) "Микрофон выкл." else "Микрофон",
+                            label = if (muted) "Включить" else "Микрофон",
+                            active = muted,
                             onClick = onToggleMute,
                         ) {
                             Icon(
@@ -196,6 +236,7 @@ fun ActiveCallOverlay(
 
                         CallControlButton(
                             label = if (speakerEnabled) "Динамик" else "Телефон",
+                            active = speakerEnabled,
                             onClick = onToggleSpeaker,
                         ) {
                             Icon(
@@ -206,8 +247,8 @@ fun ActiveCallOverlay(
 
                         CallControlButton(
                             label = "Завершить",
-                            onClick = onEnd,
                             destructive = true,
+                            onClick = onEnd,
                         ) {
                             Icon(Icons.Default.CallEnd, contentDescription = "Завершить")
                         }
@@ -219,24 +260,148 @@ fun ActiveCallOverlay(
 }
 
 @Composable
+fun MinimizedCallBanner(
+    peerName: String,
+    peerAvatarUrl: String = "",
+    statusText: String,
+    durationSeconds: Int,
+    onOpen: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp, start = 14.dp, end = 14.dp)
+            .zIndex(18f),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(26.dp))
+                .clickable(onClick = onOpen),
+            shape = RoundedCornerShape(26.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(CircleShape)
+                        .background(PulseCallBlue.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val model = resolveCallAvatarUrl(peerAvatarUrl)
+                    if (model.isNotBlank()) {
+                        AsyncImage(
+                            model = model,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(CircleShape),
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Call,
+                            contentDescription = null,
+                            tint = PulseCallBlue,
+                        )
+                    }
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = peerName,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = if (durationSeconds > 0) {
+                            "${formatCallDuration(durationSeconds)} • $statusText"
+                        } else {
+                            statusText
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                Text(
+                    text = "Открыть",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = PulseCallBlue,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CallAnswerButton(
+    label: String,
+    color: Color,
+    onClick: () -> Unit,
+    icon: @Composable () -> Unit,
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        FilledIconButton(
+            onClick = onClick,
+            modifier = Modifier.size(72.dp),
+            colors = IconButtonDefaults.filledIconButtonColors(
+                containerColor = color,
+                contentColor = Color.White,
+            ),
+        ) {
+            icon()
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White.copy(alpha = 0.88f),
+        )
+    }
+}
+
+@Composable
 private fun CallControlButton(
     label: String,
-    onClick: () -> Unit,
+    active: Boolean = false,
     destructive: Boolean = false,
+    onClick: () -> Unit,
     icon: @Composable () -> Unit,
 ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         if (destructive) {
             FilledIconButton(
                 onClick = onClick,
-                modifier = Modifier.size(62.dp),
+                modifier = Modifier.size(64.dp),
+                colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = PulseCallRed,
+                    contentColor = Color.White,
+                ),
             ) {
                 icon()
             }
         } else {
             FilledTonalIconButton(
                 onClick = onClick,
-                modifier = Modifier.size(62.dp),
+                modifier = Modifier.size(64.dp),
+                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                    containerColor = if (active) PulseCallBlue else MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = if (active) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                ),
             ) {
                 icon()
             }
@@ -254,9 +419,14 @@ private fun CallControlButton(
 }
 
 @Composable
-private fun CallAvatar(name: String) {
+private fun CallAvatar(
+    name: String,
+    avatarUrl: String,
+    size: Int,
+) {
+    val model = resolveCallAvatarUrl(avatarUrl)
     val initials = name
-        .split(" ")
+        .split(" ", "_", "-", ".")
         .mapNotNull { it.firstOrNull()?.uppercaseChar()?.toString() }
         .take(2)
         .joinToString("")
@@ -264,22 +434,62 @@ private fun CallAvatar(name: String) {
 
     Box(
         modifier = Modifier
-            .size(116.dp)
+            .size(size.dp)
             .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.primaryContainer),
+            .background(
+                Brush.linearGradient(
+                    listOf(
+                        PulseCallBlue.copy(alpha = 0.95f),
+                        PulseCallDeepBlue.copy(alpha = 0.95f),
+                    )
+                )
+            ),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = initials,
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onPrimaryContainer,
-        )
+        if (model.isNotBlank()) {
+            AsyncImage(
+                model = model,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape),
+            )
+        } else {
+            Text(
+                text = initials,
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+            )
+        }
     }
 }
 
-private fun formatCallDuration(seconds: Int): String {
-    val minutes = seconds / 60
-    val rest = seconds % 60
+@Composable
+private fun CallBackgroundBrush(): Brush {
+    return Brush.verticalGradient(
+        listOf(
+            PulseCallDeepBlue,
+            PulseCallBlue.copy(alpha = 0.86f),
+            PulseCallDark,
+        )
+    )
+}
+
+private fun resolveCallAvatarUrl(raw: String): String {
+    val value = raw.trim()
+    if (value.isBlank()) return ""
+    if (value.startsWith("http://") || value.startsWith("https://")) return value
+
+    val base = BuildConfig.BASE_URL.trimEnd('/')
+    val path = if (value.startsWith('/')) value else "/$value"
+    return "$base$path"
+}
+
+fun formatCallDuration(seconds: Int): String {
+    val safe = seconds.coerceAtLeast(0)
+    val minutes = safe / 60
+    val rest = safe % 60
     return "%d:%02d".format(minutes, rest)
 }
