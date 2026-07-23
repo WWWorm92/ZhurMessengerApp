@@ -85,9 +85,9 @@ class DmChatRepository(
             }
 
             val body = response.body()
-            val decryptedMessages = withContext(Dispatchers.Default) {
-                body?.messages.orEmpty().map { e2eeCrypto.tryDecryptDmMessage(it) }
-            }
+            val decryptedMessages = e2eeCrypto.decryptAndRepairDmMessages(
+                body?.messages.orEmpty()
+            )
 
             Result.success(
                 DmMessagesPayload(
@@ -131,7 +131,15 @@ class DmChatRepository(
             poll == null &&
             forwardedFromName.isNullOrBlank()
 
-        val peerHasE2EE = if (shouldEncrypt) e2eeCrypto.hasPeerE2EEKeys(peerUserId) else false
+        val peerHasE2EE = if (shouldEncrypt) {
+            runCatching { e2eeCrypto.hasPeerE2EEKeys(peerUserId) }.getOrElse { error ->
+                return Result.failure(
+                    IllegalStateException(error.message ?: "Failed to check E2EE status")
+                )
+            }
+        } else {
+            false
+        }
 
         val encrypted = if (shouldEncrypt && peerHasE2EE) {
             e2eeCrypto.encryptDmText(peerUserId, content).getOrElse { error ->
@@ -141,11 +149,7 @@ class DmChatRepository(
             null
         }
 
-        val encryptedPreview = if (encrypted != null) {
-            e2eeCrypto.encryptPushPreview(peerUserId, content.take(240)).getOrNull()
-        } else {
-            null
-        }
+        val notificationPreview = if (encrypted != null) content.trim().take(240) else null
 
         val response = networkProvider.api.sendDmMessage(
             authorization = "Bearer $token",
@@ -161,9 +165,9 @@ class DmChatRepository(
                 encryptedHeader = encrypted?.encryptedHeader,
                 encryptionVersion = if (encrypted != null) 1 else null,
                 recipientDeviceId = encrypted?.recipientDeviceId,
-                notificationPreview = null,
-                notificationPreviewEncryptedPayload = encryptedPreview?.encryptedPayload,
-                notificationPreviewEncryptedHeader = encryptedPreview?.encryptedHeader,
+                notificationPreview = notificationPreview,
+                notificationPreviewEncryptedPayload = null,
+                notificationPreviewEncryptedHeader = null,
                 replyToMessageId = replyToMessageId,
                 poll = poll,
                 forwardedFromName = forwardedFromName
@@ -302,7 +306,13 @@ class DmChatRepository(
             return Result.failure(IllegalStateException("No session token"))
         }
 
-        if (!e2eeCrypto.hasPeerE2EEKeys(peerUserId)) {
+        val peerHasE2EE = runCatching { e2eeCrypto.hasPeerE2EEKeys(peerUserId) }.getOrElse { error ->
+            return Result.failure(
+                IllegalStateException(error.message ?: "Failed to check E2EE status")
+            )
+        }
+
+        if (!peerHasE2EE) {
             return sendLegacyAttachment(
                 peerUserId = peerUserId,
                 context = context,
@@ -367,8 +377,7 @@ class DmChatRepository(
                 return Result.failure(IllegalStateException(error.message ?: "Failed to encrypt attachment metadata"))
             }
 
-            val previewText = caption.ifBlank { fallbackPreview }
-            val encryptedPreview = e2eeCrypto.encryptPushPreview(peerUserId, previewText.take(240)).getOrNull()
+            val previewText = caption.ifBlank { fallbackPreview }.take(240)
 
             val response = networkProvider.api.sendDmMessage(
                 authorization = "Bearer $token",
@@ -384,9 +393,9 @@ class DmChatRepository(
                     encryptedHeader = encrypted.encryptedHeader,
                     encryptionVersion = 1,
                     recipientDeviceId = encrypted.recipientDeviceId,
-                    notificationPreview = null,
-                    notificationPreviewEncryptedPayload = encryptedPreview?.encryptedPayload,
-                    notificationPreviewEncryptedHeader = encryptedPreview?.encryptedHeader,
+                    notificationPreview = previewText,
+                    notificationPreviewEncryptedPayload = null,
+                    notificationPreviewEncryptedHeader = null,
                     replyToMessageId = replyToMessageId,
                 )
             )
@@ -669,7 +678,14 @@ class DmChatRepository(
     }
 
     private fun resolveMediaUrl(url: String): String {
-        val value = url.trim()
+        val original = url.trim()
+        val legacyEncryptedMatch = Regex("^/uploads/files/([^/?]+-encrypted\\.bin)(?:\\?.*)?$", RegexOption.IGNORE_CASE)
+            .find(original)
+        val value = if (legacyEncryptedMatch != null) {
+            "/api/e2ee/files/${legacyEncryptedMatch.groupValues[1]}"
+        } else {
+            original
+        }
         if (value.startsWith("http://") || value.startsWith("https://")) {
             return value
         }

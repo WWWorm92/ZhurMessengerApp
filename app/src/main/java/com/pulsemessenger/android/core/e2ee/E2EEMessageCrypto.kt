@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Base64
 import android.util.Log
 import com.pulsemessenger.android.core.network.DmMessageDto
+import com.pulsemessenger.android.core.network.E2EEAppendEnvelopesRequest
+import com.pulsemessenger.android.core.network.E2EEEnvelopeDto
 import com.pulsemessenger.android.core.network.E2EEPreKeyBundleDto
 import com.pulsemessenger.android.core.network.NetworkProvider
 import com.pulsemessenger.android.core.session.SessionStore
@@ -38,6 +40,11 @@ class E2EEMessageCrypto(
         val recipientDeviceId: Long?,
     )
 
+    private data class DecryptedPayloadResult(
+        val plaintext: String,
+        val messageKey: ByteArray,
+    )
+
     suspend fun encryptDmText(peerUserId: Long, plaintext: String): Result<EncryptedDmMessage> = withContext(Dispatchers.IO) {
         try {
             val normalized = plaintext.trim()
@@ -52,16 +59,14 @@ class E2EEMessageCrypto(
                 return@withContext Result.failure(IllegalStateException("No session token"))
             }
 
-            val response = networkProvider.api.e2eePreKeyBundle("Bearer $token", peerUserId)
-            if (!response.isSuccessful) {
-                return@withContext Result.failure(IllegalStateException("E2EE keys unavailable for recipient"))
+            val authorization = "Bearer $token"
+            val recipientBundles = loadRecipientBundles(authorization, peerUserId)
+            if (recipientBundles.isEmpty()) {
+                return@withContext Result.failure(IllegalStateException("Recipient has no E2EE keys"))
             }
 
-            val recipient = response.body()?.bundle
-                ?: return@withContext Result.failure(IllegalStateException("Recipient has no E2EE keys"))
-
-            val self = keyManager.localPublicBundleForSelf()
             val selfDeviceId = registration.deviceId ?: keyManager.currentDeviceId()
+            val selfBundles = loadSelfBundles(authorization, selfDeviceId)
             val messageKey = randomBytes(32)
             val messageIv = randomBytes(GCM_IV_BYTES)
             val ciphertext = aesGcmEncrypt(
@@ -71,10 +76,16 @@ class E2EEMessageCrypto(
             )
 
             val envelopes = JSONArray()
-            envelopes.put(wrapMessageKeyForRecipient("recipient", recipient, messageKey))
-            if (selfDeviceId != null) {
-                envelopes.put(wrapMessageKeyForSelf(selfDeviceId, self, messageKey))
-            }
+            recipientBundles
+                .distinctBy { it.deviceId }
+                .forEach { bundle ->
+                    envelopes.put(wrapMessageKeyForRecipient("recipient", bundle, messageKey))
+                }
+            selfBundles
+                .distinctBy { it.deviceId }
+                .forEach { bundle ->
+                    envelopes.put(wrapMessageKeyForRecipient("self", bundle, messageKey))
+                }
 
             val header = JSONObject()
                 .put("v", 1)
@@ -86,7 +97,7 @@ class E2EEMessageCrypto(
                 EncryptedDmMessage(
                     encryptedPayload = b64(ciphertext),
                     encryptedHeader = header.toString(),
-                    recipientDeviceId = recipient.deviceId,
+                    recipientDeviceId = recipientBundles.firstOrNull()?.deviceId,
                 )
             )
         } catch (error: Throwable) {
@@ -99,19 +110,70 @@ class E2EEMessageCrypto(
         return encryptDmText(peerUserId, plaintext.take(240))
     }
 
-    suspend fun hasPeerE2EEKeys(peerUserId: Long): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val token = sessionStore.currentToken().trim()
-            if (token.isBlank()) {
-                return@withContext false
-            }
+    private suspend fun loadRecipientBundles(
+        authorization: String,
+        peerUserId: Long,
+    ): List<E2EEPreKeyBundleDto> {
+        val multi = runCatching {
+            networkProvider.api.e2eePreKeyBundles(authorization, peerUserId)
+        }.getOrNull()
 
-            val response = networkProvider.api.e2eePeerStatus("Bearer $token", peerUserId)
-            response.isSuccessful && response.body()?.hasDeviceKeys == true
-        } catch (error: Throwable) {
-            Log.w("E2EE", "peer status check failed: ${error.message}")
-            false
+        if (multi?.isSuccessful == true) {
+            val bundles = multi.body()?.bundles.orEmpty().filter { it.deviceId > 0L }
+            if (bundles.isNotEmpty()) {
+                return bundles
+            }
         }
+
+        val legacy = networkProvider.api.e2eePreKeyBundle(authorization, peerUserId)
+        if (!legacy.isSuccessful) {
+            throw IllegalStateException("E2EE keys unavailable for recipient")
+        }
+        return listOfNotNull(legacy.body()?.bundle).filter { it.deviceId > 0L }
+    }
+
+    private suspend fun loadSelfBundles(
+        authorization: String,
+        currentDeviceId: Long?,
+    ): List<E2EEPreKeyBundleDto> {
+        val multi = runCatching {
+            networkProvider.api.e2eeSelfPreKeyBundles(authorization)
+        }.getOrNull()
+
+        if (multi?.isSuccessful == true) {
+            val bundles = multi.body()?.bundles.orEmpty().filter { it.deviceId > 0L }
+            if (bundles.isNotEmpty()) {
+                return bundles
+            }
+        }
+
+        val self = keyManager.localPublicBundleForSelf()
+        val deviceId = currentDeviceId ?: return emptyList()
+        return listOf(
+            E2EEPreKeyBundleDto(
+                userId = 0L,
+                deviceId = deviceId,
+                registrationId = self.registrationId,
+                identityKeyPublic = self.identityKeyPublic,
+                signedPreKeyId = self.signedPreKeyId,
+                signedPreKeyPublic = self.signedPreKeyPublic,
+                signedPreKeySignature = self.signedPreKeySignature,
+                oneTimePreKey = null,
+            )
+        )
+    }
+
+    suspend fun hasPeerE2EEKeys(peerUserId: Long): Boolean = withContext(Dispatchers.IO) {
+        val token = sessionStore.currentToken().trim()
+        if (token.isBlank()) {
+            throw IllegalStateException("No session token")
+        }
+
+        val response = networkProvider.api.e2eePeerStatus("Bearer $token", peerUserId)
+        if (!response.isSuccessful) {
+            throw IllegalStateException("E2EE status check failed: HTTP ${response.code()}")
+        }
+        response.body()?.hasDeviceKeys == true
     }
 
     fun tryDecryptDmMessage(message: DmMessageDto): DmMessageDto {
@@ -124,8 +186,7 @@ class E2EEMessageCrypto(
                 encryptedPayload = message.encryptedPayload,
                 encryptedHeader = message.encryptedHeader,
             )
-            val attachmentMessage = tryParseEncryptedAttachmentMessage(message, plaintext)
-            attachmentMessage ?: message.copy(content = plaintext, type = "text")
+            applyPlaintextToMessage(message, plaintext)
         }.getOrElse { error ->
             Log.w("E2EE", "decrypt failed message=${message.id}: ${error.message}")
             message.copy(
@@ -151,6 +212,119 @@ class E2EEMessageCrypto(
         }
     }
 
+
+    suspend fun decryptAndRepairDmMessages(messages: List<DmMessageDto>): List<DmMessageDto> = withContext(Dispatchers.IO) {
+        if (messages.none { it.encryptionVersion > 0 && it.encryptedPayload.isNotBlank() && it.encryptedHeader.isNotBlank() }) {
+            return@withContext messages
+        }
+
+        val token = sessionStore.currentToken().trim()
+        val authorization = token.takeIf { it.isNotBlank() }?.let { "Bearer $it" }
+        val registration = if (authorization != null) {
+            runCatching { keyManager.ensureRegistered().getOrThrow() }.getOrNull()
+        } else {
+            null
+        }
+        val selfBundles = if (authorization != null) {
+            runCatching {
+                loadSelfBundles(
+                    authorization = authorization,
+                    currentDeviceId = registration?.deviceId ?: keyManager.currentDeviceId(),
+                )
+            }.getOrDefault(emptyList())
+        } else {
+            emptyList()
+        }
+
+        messages.map { message ->
+            if (message.encryptionVersion <= 0 || message.encryptedPayload.isBlank() || message.encryptedHeader.isBlank()) {
+                return@map message
+            }
+
+            val decrypted = runCatching {
+                decryptPayloadWithKey(
+                    encryptedPayload = message.encryptedPayload,
+                    encryptedHeader = message.encryptedHeader,
+                )
+            }.getOrElse { error ->
+                Log.w("E2EE", "decrypt failed message=${message.id}: ${error.message}")
+                return@map message.copy(
+                    content = "Сообщение недоступно на этом устройстве",
+                    type = "text",
+                )
+            }
+
+            val repaired = if (authorization != null && selfBundles.isNotEmpty()) {
+                runCatching {
+                    appendMissingSelfEnvelopes(
+                        authorization = authorization,
+                        message = message,
+                        messageKey = decrypted.messageKey,
+                        selfBundles = selfBundles,
+                    )
+                }.getOrElse { error ->
+                    Log.w("E2EE", "envelope repair failed message=${message.id}: ${error.message}")
+                    message
+                }
+            } else {
+                message
+            }
+
+            applyPlaintextToMessage(repaired, decrypted.plaintext)
+        }
+    }
+
+    private suspend fun appendMissingSelfEnvelopes(
+        authorization: String,
+        message: DmMessageDto,
+        messageKey: ByteArray,
+        selfBundles: List<E2EEPreKeyBundleDto>,
+    ): DmMessageDto {
+        val header = JSONObject(message.encryptedHeader)
+        val existing = mutableSetOf<Long>()
+        val existingEnvelopes = header.optJSONArray("envelopes") ?: JSONArray()
+        for (index in 0 until existingEnvelopes.length()) {
+            val deviceId = existingEnvelopes.optJSONObject(index)?.optLong("targetDeviceId", 0L) ?: 0L
+            if (deviceId > 0L) {
+                existing += deviceId
+            }
+        }
+
+        val missing = selfBundles
+            .filter { it.deviceId > 0L && it.deviceId !in existing }
+            .distinctBy { it.deviceId }
+        if (missing.isEmpty()) {
+            return message
+        }
+
+        val envelopes = missing.map { bundle ->
+            val json = wrapMessageKeyForRecipient("self", bundle, messageKey)
+            E2EEEnvelopeDto(
+                kind = "self",
+                targetDeviceId = json.getLong("targetDeviceId"),
+                signedPreKeyId = json.getInt("signedPreKeyId"),
+                oneTimePreKeyId = json.optInt("oneTimePreKeyId", 0),
+                ephemeralPublic = json.getString("ephemeralPublic"),
+                keyIv = json.getString("keyIv"),
+                keyCipher = json.getString("keyCipher"),
+            )
+        }
+
+        val response = networkProvider.api.appendDmE2EEEnvelopes(
+            authorization = authorization,
+            messageId = message.id,
+            body = E2EEAppendEnvelopesRequest(envelopes = envelopes),
+        )
+        if (!response.isSuccessful) {
+            throw IllegalStateException("Envelope repair failed: HTTP ${response.code()}")
+        }
+        return response.body()?.message ?: message
+    }
+
+    private fun applyPlaintextToMessage(message: DmMessageDto, plaintext: String): DmMessageDto {
+        val attachmentMessage = tryParseEncryptedAttachmentMessage(message, plaintext)
+        return attachmentMessage ?: message.copy(content = plaintext, type = "text")
+    }
 
     private fun tryParseEncryptedAttachmentMessage(message: DmMessageDto, plaintext: String): DmMessageDto? {
         return runCatching {
@@ -189,27 +363,38 @@ class E2EEMessageCrypto(
     }
 
     private fun decryptPayload(encryptedPayload: String, encryptedHeader: String): String {
+        return decryptPayloadWithKey(encryptedPayload, encryptedHeader).plaintext
+    }
+
+    private fun decryptPayloadWithKey(
+        encryptedPayload: String,
+        encryptedHeader: String,
+    ): DecryptedPayloadResult {
         keyManager.localPublicBundleForSelf()
 
         val header = JSONObject(encryptedHeader)
-        if (header.optInt("v", 0) != 1) {
+        if (header.optInt("v", 0) != 1 || header.optString("alg") != ALG) {
             throw IllegalStateException("Unsupported E2EE version")
         }
 
         val messageIv = b64decode(header.getString("messageIv"))
+        val ciphertext = b64decode(encryptedPayload)
         val envelopes = header.getJSONArray("envelopes")
         var lastError: Throwable? = null
 
         for (i in 0 until envelopes.length()) {
             val envelope = envelopes.optJSONObject(i) ?: continue
             try {
-                val wrappedKey = unwrapMessageKey(envelope)
+                val messageKey = unwrapMessageKey(envelope)
                 val plaintext = aesGcmDecrypt(
-                    key = wrappedKey,
+                    key = messageKey,
                     iv = messageIv,
-                    ciphertext = b64decode(encryptedPayload),
+                    ciphertext = ciphertext,
                 )
-                return String(plaintext, Charsets.UTF_8)
+                return DecryptedPayloadResult(
+                    plaintext = String(plaintext, Charsets.UTF_8),
+                    messageKey = messageKey,
+                )
             } catch (error: Throwable) {
                 lastError = error
             }

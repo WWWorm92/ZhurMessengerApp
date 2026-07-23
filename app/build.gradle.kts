@@ -17,8 +17,8 @@ android {
         applicationId = "com.pulsemessenger.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 45
-        versionName = "0.4.5"
+        versionCode = 47
+        versionName = "0.4.7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
