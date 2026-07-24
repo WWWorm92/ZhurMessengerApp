@@ -448,22 +448,4 @@ interface PulseApiService {
         @Path("userId") userId: Long,
     ): Response<E2EEPreKeyBundleResponse>
 
-    @GET("/api/e2ee/users/{userId}/bundles")
-    suspend fun e2eePreKeyBundles(
-        @Header("Authorization") authorization: String,
-        @Path("userId") userId: Long,
-    ): Response<E2EEPreKeyBundlesResponse>
-
-    @GET("/api/e2ee/self/bundles")
-    suspend fun e2eeSelfPreKeyBundles(
-        @Header("Authorization") authorization: String,
-    ): Response<E2EEPreKeyBundlesResponse>
-
-    @POST("/api/messages/item/{messageId}/e2ee-envelopes")
-    suspend fun appendDmE2EEEnvelopes(
-        @Header("Authorization") authorization: String,
-        @Path("messageId") messageId: Long,
-        @Body body: E2EEAppendEnvelopesRequest,
-    ): Response<SendMessageResponse>
-
 }

@@ -597,21 +597,3 @@ data class E2EEPreKeyBundleDto(
 data class E2EEPreKeyBundleResponse(
     val bundle: E2EEPreKeyBundleDto? = null,
 )
-
-data class E2EEPreKeyBundlesResponse(
-    val bundles: List<E2EEPreKeyBundleDto> = emptyList(),
-)
-
-data class E2EEEnvelopeDto(
-    val kind: String = "self",
-    val targetDeviceId: Long,
-    val signedPreKeyId: Int,
-    val oneTimePreKeyId: Int = 0,
-    val ephemeralPublic: String,
-    val keyIv: String,
-    val keyCipher: String,
-)
-
-data class E2EEAppendEnvelopesRequest(
-    val envelopes: List<E2EEEnvelopeDto> = emptyList(),
-)

@@ -18,7 +18,6 @@ import com.pulsemessenger.android.MainActivity
 import com.pulsemessenger.android.PulseApp
 import com.pulsemessenger.android.R
 import com.pulsemessenger.android.core.call.CallNotificationHelper
-import com.pulsemessenger.android.core.e2ee.E2EEMessageCrypto
 
 class FCMService : FirebaseMessagingService() {
 
@@ -72,7 +71,7 @@ class FCMService : FirebaseMessagingService() {
 
         val title = data["title"].orEmpty().ifBlank { "Zhuravlik" }
         val senderName = data["senderName"].orEmpty()
-        val body = resolveMessageNotificationBody(data)
+        val body = data["body"].orEmpty().ifBlank { "Новое сообщение" }
         val url = data["url"] ?: "/"
 
         val line = if (scope == "room" && senderName.isNotBlank()) {
@@ -98,32 +97,6 @@ class FCMService : FirebaseMessagingService() {
             targetId = targetId,
             chatKey = chatKey,
         )
-    }
-
-    private fun resolveMessageNotificationBody(data: Map<String, String>): String {
-        val encryptedPayload = data["encryptedPayload"].orEmpty()
-        val encryptedHeader = data["encryptedHeader"].orEmpty()
-        val encryptionVersion = data["encryptionVersion"]?.toIntOrNull() ?: 0
-
-        if (encryptionVersion > 0 && encryptedPayload.isNotBlank() && encryptedHeader.isNotBlank()) {
-            val decrypted = runCatching {
-                val app = PulseApp.instance
-                E2EEMessageCrypto(
-                    context = app.applicationContext,
-                    networkProvider = app.networkProvider,
-                    sessionStore = app.sessionStore,
-                ).tryDecryptPushPreview(
-                    encryptedPayload = encryptedPayload,
-                    encryptedHeader = encryptedHeader,
-                )
-            }.getOrNull()
-
-            if (!decrypted.isNullOrBlank()) {
-                return decrypted
-            }
-        }
-
-        return data["body"].orEmpty().ifBlank { "Новое сообщение" }
     }
 
     private fun showFallbackNotification(title: String, body: String, url: String) {
