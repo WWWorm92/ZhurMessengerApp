@@ -513,6 +513,7 @@ fun DmChatScreen(
                                 )
                             },
                             onRetrySend = { viewModel.retryPendingMessage(message.id, context) },
+                            onCallClick = onCallClick,
                             quickReactions = viewModel.quickReactions,
                             onToggleReaction = { emoji -> viewModel.toggleReaction(message.id, emoji) },
                             currentUserId = currentUserId,
@@ -871,6 +872,7 @@ private fun PendingAttachmentsPreview(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun DmMessageBubble(
+
     message: DmMessageDto,
     albumMessages: List<DmMessageDto> = emptyList(),
     isMine: Boolean,
@@ -883,6 +885,7 @@ private fun DmMessageBubble(
     onRetrySend: () -> Unit = {},
     quickReactions: List<String>,
     onToggleReaction: (String) -> Unit,
+    onCallClick: () -> Unit,
     currentUserId: Long?,
     currentUserIsAdmin: Boolean,
     onVotePoll: (Long, List<Long>) -> Unit,
@@ -898,6 +901,14 @@ private fun DmMessageBubble(
     isSelected: Boolean = false,
     onToggleSelect: () -> Unit = {},
 ) {
+    if (message.type.equals("call", ignoreCase = true)) {
+        DmCallHistoryBubble(
+            message = message,
+            isMine = isMine,
+            onCallClick = onCallClick,
+        )
+        return
+    }
     var menuExpanded by remember(message.id) { mutableStateOf(false) }
     var confirmDelete by remember(message.id) { mutableStateOf(false) }
     val resolvedFileUrl = if (message.fileUrl.isNotBlank()) resolveChatMediaUrl(message.fileUrl) else ""
