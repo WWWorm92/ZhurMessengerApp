@@ -32,8 +32,8 @@ class DialogsViewModel(
 
     private fun sortedUsers(items: List<DialogUserDto>): List<DialogUserDto> {
         return items.sortedWith(
-            compareByDescending<DialogUserDto> { it.pinned }
-                .thenByDescending { it.draftUpdatedAt ?: it.lastMessageAt ?: "" }
+            compareByDescending<DialogUserDto> { it.isSaved || it.pinned }
+                .thenByDescending { it.lastMessageAt ?: "" }
         )
     }
 
@@ -44,9 +44,9 @@ class DialogsViewModel(
                     user
                 } else {
                     user.copy(
-                        pinned = preferences.pinned,
-                        muted = preferences.muted,
-                        archived = preferences.archived,
+                        pinned = user.isSaved || preferences.pinned,
+                        muted = if (user.isSaved) false else preferences.muted,
+                        archived = if (user.isSaved) false else preferences.archived,
                         muteUntil = preferences.muteUntil,
                         notificationPreview = preferences.notificationPreview,
                         wallpaper = preferences.wallpaper,
@@ -60,6 +60,7 @@ class DialogsViewModel(
 
     fun togglePin(userId: Long) {
         val user = users.firstOrNull { it.id == userId } ?: return
+        if (user.isSaved) return
         viewModelScope.launch {
             repository.updateDmChatPrefs(userId, pinned = !user.pinned)
                 .onSuccess {
@@ -70,6 +71,7 @@ class DialogsViewModel(
 
     fun toggleMute(userId: Long) {
         val user = users.firstOrNull { it.id == userId } ?: return
+        if (user.isSaved) return
         viewModelScope.launch {
             repository.updateDmChatPrefs(userId, muted = !user.muted)
                 .onSuccess {
@@ -89,6 +91,7 @@ class DialogsViewModel(
 
     fun toggleArchive(userId: Long) {
         val user = users.firstOrNull { it.id == userId } ?: return
+        if (user.isSaved) return
         viewModelScope.launch {
             repository.updateDmChatPrefs(userId, archived = !user.archived)
                 .onSuccess {
@@ -112,7 +115,8 @@ class DialogsViewModel(
     fun onPresenceUpdate(onlineUserIds: Set<Long>) {
         if (users.isEmpty()) return
         users = users.map { user ->
-            if (user.online == onlineUserIds.contains(user.id)) user
+            if (user.isSaved) user.copy(online = false)
+            else if (user.online == onlineUserIds.contains(user.id)) user
             else user.copy(online = onlineUserIds.contains(user.id))
         }
     }

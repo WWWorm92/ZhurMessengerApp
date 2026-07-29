@@ -376,6 +376,7 @@ fun DmChatScreen(
 
                         Text(
                             text = when {
+                                peer.isSaved -> "личные заметки"
                                 viewModel.isPeerTyping -> "печатает..."
                                 viewModel.isPeerOnline -> "в сети"
                                 else -> formatLastSeen(peer.lastSeenAt).ifBlank { "не в сети" }
@@ -391,8 +392,10 @@ fun DmChatScreen(
                         )
                     }
 
-                    IconButton(onClick = onCallClick) {
-                        Icon(Icons.Default.Call, contentDescription = "Позвонить")
+                    if (!peer.isSaved) {
+                        IconButton(onClick = onCallClick) {
+                            Icon(Icons.Default.Call, contentDescription = "Позвонить")
+                        }
                     }
 
                     IconButton(onClick = onOpenSearch) {
@@ -1190,7 +1193,11 @@ private fun DmMessageBubble(
                         if (localSendState.isNotBlank() && message.deletedAt == null) {
                             Spacer(modifier = Modifier.height(6.dp))
                             val statusText = when (localSendState) {
-                                "sending" -> if (localMediaState == "uploading") "" else "Отправляется..."
+                                "sending" -> when {
+                                    localMediaState == "uploading" -> ""
+                                    message.localError == "queued" -> "В очереди — отправится при появлении сети"
+                                    else -> "Отправляется..."
+                                }
                                 "failed" -> "Не отправлено. Нажмите, чтобы повторить"
                                 else -> ""
                             }
@@ -1437,18 +1444,42 @@ private data class DmMessageListItem(
 )
 
 private fun buildDmMessageListItems(messages: List<DmMessageDto>): List<DmMessageListItem> {
+    // A queued item can coexist briefly with its server copy when the socket
+    // event was missed and history was refreshed. Remove only one matching
+    // queued row per server row, so two intentionally identical messages stay
+    // visible as two messages.
+    val unmatchedServerIds = messages
+        .asSequence()
+        .filter { it.id >= 0L }
+        .map { it.id }
+        .toMutableSet()
+
+    val hiddenPendingIds = mutableSetOf<Long>()
+    messages.asSequence()
+        .filter { it.id < 0L && it.localError == "queued" }
+        .forEach { pending ->
+            val match = messages.firstOrNull { server ->
+                server.id in unmatchedServerIds && queuedMessageMatchesServer(pending, server)
+            }
+            if (match != null) {
+                hiddenPendingIds += pending.id
+                unmatchedServerIds -= match.id
+            }
+        }
+
+    val visibleMessages = messages.filterNot { it.id in hiddenPendingIds }
     val result = mutableListOf<DmMessageListItem>()
     var index = 0
 
-    while (index < messages.size) {
-        val message = messages[index]
+    while (index < visibleMessages.size) {
+        val message = visibleMessages[index]
 
         if (message.isAlbumImage()) {
             val album = mutableListOf<DmMessageDto>()
             var cursor = index
 
-            while (cursor < messages.size) {
-                val candidate = messages[cursor]
+            while (cursor < visibleMessages.size) {
+                val candidate = visibleMessages[cursor]
 
                 if (candidate.isAlbumImage() && candidate.mediaGroupId == message.mediaGroupId) {
                     album += candidate
@@ -1473,6 +1504,24 @@ private fun buildDmMessageListItems(messages: List<DmMessageDto>): List<DmMessag
     }
 
     return result
+}
+
+
+private fun queuedMessageMatchesServer(
+    pending: DmMessageDto,
+    server: DmMessageDto,
+): Boolean {
+    if (pending.id >= 0L || server.id < 0L) return false
+    if (pending.type != server.type) return false
+    if (pending.content != server.content) return false
+    if (pending.receiverId != server.receiverId) return false
+    if (pending.replyToMessageId != server.replyToMessageId) return false
+
+    val pendingAt = runCatching { java.time.Instant.parse(pending.createdAt) }.getOrNull()
+    val serverAt = runCatching { java.time.Instant.parse(server.createdAt) }.getOrNull()
+    if (pendingAt == null || serverAt == null) return true
+
+    return kotlin.math.abs(java.time.Duration.between(pendingAt, serverAt).seconds) <= 300L
 }
 
 private fun DmMessageDto.isAlbumImage(): Boolean {

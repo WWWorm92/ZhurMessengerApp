@@ -5,11 +5,11 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
 import com.google.firebase.FirebaseApp
-import com.pulsemessenger.android.core.notification.FCMService
 import com.pulsemessenger.android.core.notification.PushManager
 import com.pulsemessenger.android.core.network.NetworkProvider
 import com.pulsemessenger.android.core.session.SessionStore
 import com.pulsemessenger.android.core.notification.PulseNotificationStore
+import com.pulsemessenger.android.core.offline.OutboxScheduler
 
 class PulseApp : Application() {
     lateinit var networkProvider: NetworkProvider
@@ -27,6 +27,9 @@ class PulseApp : Application() {
         pushManager = PushManager(this)
         createNotificationChannel()
         FirebaseApp.initializeApp(this)
+        if (sessionStore.currentToken().isNotBlank()) {
+            OutboxScheduler.enqueueNow(this)
+        }
     }
 
     private fun createNotificationChannel() {

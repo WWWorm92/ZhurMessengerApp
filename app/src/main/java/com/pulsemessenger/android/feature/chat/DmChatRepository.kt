@@ -5,6 +5,10 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import com.google.gson.Gson
+import com.pulsemessenger.android.PulseApp
+import com.pulsemessenger.android.core.offline.NetworkState
+import com.pulsemessenger.android.core.offline.OfflineStore
+import com.pulsemessenger.android.core.offline.OutboxQueue
 import com.pulsemessenger.android.core.e2ee.E2EEAttachmentCrypto
 import com.pulsemessenger.android.core.network.createFilePart
 import com.pulsemessenger.android.core.network.createImagePart
@@ -23,12 +27,18 @@ import com.pulsemessenger.android.core.network.VotePollRequest
 import androidx.core.content.FileProvider
 import com.pulsemessenger.android.core.session.SessionStore
 import java.io.File
+import java.util.UUID
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class DmChatRepository(
     private val networkProvider: NetworkProvider,
     private val sessionStore: SessionStore,
 ) {
     private val gson = Gson()
+    private val appContext get() = PulseApp.instance.applicationContext
+    private val offlineStore by lazy { OfflineStore.get(appContext) }
 
     private fun safeString(value: String?): String = value.orEmpty()
 
@@ -53,12 +63,30 @@ class DmChatRepository(
         beforeId: Long? = null,
         limit: Int = 60,
     ): Result<DmMessagesPayload> {
-        return try {
-            val token = sessionStore.currentToken().trim()
-            if (token.isBlank()) {
-                return Result.failure(IllegalStateException("No session token"))
-            }
+        val cached = suspend {
+            offlineStore.loadDmMessages(peerUserId, beforeId, limit)
+        }
 
+        val token = sessionStore.currentToken().trim()
+        if (token.isBlank()) {
+            val local = cached()
+            return if (local.isNotEmpty()) {
+                Result.success(DmMessagesPayload(local, peerLastReadAt = null, hasMore = false))
+            } else {
+                Result.failure(IllegalStateException("No session token"))
+            }
+        }
+
+        if (!NetworkState.isOnline(appContext)) {
+            val local = cached()
+            return if (local.isNotEmpty()) {
+                Result.success(DmMessagesPayload(local, peerLastReadAt = null, hasMore = false))
+            } else {
+                Result.failure(IllegalStateException("Нет соединения с сервером"))
+            }
+        }
+
+        return try {
             val response = networkProvider.api.dmMessages(
                 authorization = "Bearer $token",
                 userId = peerUserId,
@@ -67,22 +95,36 @@ class DmChatRepository(
             )
 
             if (!response.isSuccessful) {
+                val local = cached()
+                if (local.isNotEmpty()) {
+                    return Result.success(DmMessagesPayload(local, peerLastReadAt = null, hasMore = false))
+                }
                 val errorBody = response.errorBody()?.string().orEmpty()
                 val parsed: ErrorResponse? = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
                 return Result.failure(IllegalStateException(parsed?.error ?: "Failed to load messages"))
             }
 
             val body = response.body()
-
+            val serverMessages = body?.messages.orEmpty()
+            if (beforeId == null) {
+                offlineStore.replaceDmMessages(peerUserId, serverMessages)
+            } else {
+                offlineStore.upsertDmMessages(peerUserId, serverMessages)
+            }
             Result.success(
                 DmMessagesPayload(
-                    messages = body?.messages.orEmpty(),
+                    messages = serverMessages,
                     peerLastReadAt = body?.peerLastReadAt,
                     hasMore = body?.hasMore == true,
                 )
             )
         } catch (error: Throwable) {
-            Result.failure(IllegalStateException(error.message ?: "Failed to load messages"))
+            val local = cached()
+            if (local.isNotEmpty()) {
+                Result.success(DmMessagesPayload(local, peerLastReadAt = null, hasMore = false))
+            } else {
+                Result.failure(IllegalStateException(error.message ?: "Failed to load messages"))
+            }
         }
     }
 
@@ -110,34 +152,81 @@ class DmChatRepository(
         if (token.isBlank()) {
             return Result.failure(IllegalStateException("No session token"))
         }
-        val response = networkProvider.api.sendDmMessage(
-            authorization = "Bearer $token",
-            userId = peerUserId,
-            body = SendMessageRequest(
-                content = content,
-                imageUrl = imageUrl,
-                fileUrl = fileUrl,
-                fileName = fileName,
-                fileSize = fileSize,
-                mediaGroupId = mediaGroupId,
-                notificationPreview = content.trim().take(240).ifBlank { null },
-                replyToMessageId = replyToMessageId,
-                poll = poll,
-                forwardedFromName = forwardedFromName,
-            )
-        )
-        if (!response.isSuccessful) {
-            val errorBody = response.errorBody()?.string().orEmpty()
-            val parsed: ErrorResponse? = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
-            return Result.failure(IllegalStateException(parsed?.error ?: "Failed to send message"))
-        }
-        val message = response.body()?.message
-            ?: return Result.failure(IllegalStateException("Empty message response"))
 
-        return Result.success(message)
+        val canQueueOffline = content.isNotBlank() &&
+            imageUrl.isNullOrBlank() &&
+            fileUrl.isNullOrBlank() &&
+            poll == null &&
+            forwardedFromName.isNullOrBlank()
+        val clientMessageId = UUID.randomUUID().toString()
+
+        suspend fun queueInstead(): Result<DmMessageDto> {
+            if (!canQueueOffline) {
+                return Result.failure(IllegalStateException("Не удалось отправить сообщение"))
+            }
+            val queued = OutboxQueue.enqueueText(
+                context = appContext,
+                scope = "dm",
+                targetId = peerUserId,
+                text = content,
+                replyToMessageId = replyToMessageId,
+                createLocalDmMessage = true,
+                clientMessageId = clientMessageId,
+            ) ?: return Result.failure(IllegalStateException("Не удалось добавить сообщение в очередь"))
+            return Result.success(queued)
+        }
+
+        if (!NetworkState.isOnline(appContext) && canQueueOffline) {
+            return queueInstead()
+        }
+
+        return try {
+            val response = networkProvider.api.sendDmMessage(
+                authorization = "Bearer $token",
+                userId = peerUserId,
+                body = SendMessageRequest(
+                    content = content,
+                    imageUrl = imageUrl,
+                    fileUrl = fileUrl,
+                    fileName = fileName,
+                    fileSize = fileSize,
+                    mediaGroupId = mediaGroupId,
+                    notificationPreview = content.trim().take(240).ifBlank { null },
+                    replyToMessageId = replyToMessageId,
+                    poll = poll,
+                    forwardedFromName = forwardedFromName,
+                    clientMessageId = clientMessageId,
+                )
+            )
+            if (!response.isSuccessful) {
+                if (canQueueOffline && (response.code() >= 500 || response.code() in setOf(408, 425, 429))) {
+                    return queueInstead()
+                }
+                val errorBody = response.errorBody()?.string().orEmpty()
+                val parsed: ErrorResponse? = runCatching { gson.fromJson(errorBody, ErrorResponse::class.java) }.getOrNull()
+                return Result.failure(IllegalStateException(parsed?.error ?: "Failed to send message"))
+            }
+            val message = response.body()?.message
+                ?: return Result.failure(IllegalStateException("Empty message response"))
+            offlineStore.upsertDmMessages(peerUserId, listOf(message))
+            Result.success(message)
+        } catch (error: Throwable) {
+            if (canQueueOffline) queueInstead()
+            else Result.failure(IllegalStateException(error.message ?: "Failed to send message"))
+        }
     }
 
-    fun decryptMessage(message: DmMessageDto): DmMessageDto = message
+    fun decryptMessage(message: DmMessageDto): DmMessageDto {
+        val peerUserId = if (message.senderId == OfflineStore.userIdFromToken(sessionStore.currentToken())) {
+            message.receiverId
+        } else {
+            message.senderId
+        }
+        CoroutineScope(Dispatchers.IO).launch {
+            if (peerUserId > 0L) offlineStore.upsertDmMessages(peerUserId, listOf(message))
+        }
+        return message
+    }
 
     suspend fun loadAttachments(peerUserId: Long): Result<List<SharedAttachmentDto>> {
         return try {

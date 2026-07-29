@@ -18,9 +18,12 @@ import com.pulsemessenger.android.core.notification.PulseNotificationStore
 
 class CallForegroundService : Service() {
     private var cpuWakeLock: PowerManager.WakeLock? = null
+    private lateinit var audioRouteController: CallAudioRouteController
 
     override fun onCreate() {
         super.onCreate()
+        audioRouteController = CallAudioRouteController(this)
+        audioRouteController.start()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -78,6 +81,9 @@ class CallForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        if (::audioRouteController.isInitialized) {
+            audioRouteController.stop()
+        }
         releaseCpuWakeLock()
         running = false
         super.onDestroy()
@@ -113,6 +119,15 @@ class CallForegroundService : Service() {
             endIntent,
             android.app.PendingIntent.FLAG_UPDATE_CURRENT or
                 android.app.PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val audioRoutePendingIntent = android.app.PendingIntent.getActivity(
+            this,
+            PulseNotificationStore.ACTIVE_CALL_NOTIFICATION_ID + 2,
+            Intent(this, CallAudioRouteActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE,
         )
 
         val largeIcon = BitmapFactory.decodeResource(
@@ -155,6 +170,11 @@ class CallForegroundService : Service() {
             .setVibrate(null)
             .setUsesChronometer(true)
             .setWhen(System.currentTimeMillis())
+            .addAction(
+                R.mipmap.ic_launcher_round,
+                "Аудио",
+                audioRoutePendingIntent,
+            )
             .build()
     }
 

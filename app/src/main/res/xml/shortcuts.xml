@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <share-target android:targetClass="com.pulsemessenger.android.core.share.ShareTargetActivity">
+        <data android:mimeType="text/*" />
+        <category android:name="com.pulsemessenger.android.category.SHARE_TARGET" />
+    </share-target>
+    <share-target android:targetClass="com.pulsemessenger.android.core.share.ShareTargetActivity">
+        <data android:mimeType="image/*" />
+        <category android:name="com.pulsemessenger.android.category.SHARE_TARGET" />
+    </share-target>
+    <share-target android:targetClass="com.pulsemessenger.android.core.share.ShareTargetActivity">
+        <data android:mimeType="video/*" />
+        <category android:name="com.pulsemessenger.android.category.SHARE_TARGET" />
+    </share-target>
+    <share-target android:targetClass="com.pulsemessenger.android.core.share.ShareTargetActivity">
+        <data android:mimeType="application/*" />
+        <category android:name="com.pulsemessenger.android.category.SHARE_TARGET" />
+    </share-target>
+</shortcuts>

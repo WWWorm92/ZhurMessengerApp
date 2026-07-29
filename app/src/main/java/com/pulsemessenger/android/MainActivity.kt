@@ -12,7 +12,6 @@ import com.pulsemessenger.android.core.call.CallActionBus
 import com.pulsemessenger.android.core.call.CallNotificationAction
 import com.pulsemessenger.android.core.call.IncomingCallAlert
 import com.pulsemessenger.android.core.call.CallForegroundService
-import com.pulsemessenger.android.core.call.CallAudioRouteController
 import com.pulsemessenger.android.core.call.ProximityScreenController
 import com.pulsemessenger.android.core.notification.PulseNotificationStore
 import com.pulsemessenger.android.ui.PulseAndroidApp
@@ -20,7 +19,6 @@ import com.pulsemessenger.android.ui.theme.PulseAndroidTheme
 
 class MainActivity : ComponentActivity() {
     private lateinit var proximityScreenController: ProximityScreenController
-    private lateinit var callAudioRouteController: CallAudioRouteController
 
     private val callServiceHandler = Handler(Looper.getMainLooper())
     private var callServiceMonitorRunning = false
@@ -38,8 +36,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         proximityScreenController = ProximityScreenController(this)
         proximityScreenController.start()
-        callAudioRouteController = CallAudioRouteController(this)
-        callAudioRouteController.start()
         handleCallIntent(intent)
 
         setContent {
@@ -96,7 +92,6 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         stopCallServiceMonitor()
         proximityScreenController.stop()
-        callAudioRouteController.stop()
         super.onDestroy()
     }
 

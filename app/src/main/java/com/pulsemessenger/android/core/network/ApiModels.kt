@@ -29,6 +29,7 @@ data class DialogUserDto(
     val displayName: String,
     val avatarUrl: String = "",
     val isAdmin: Boolean = false,
+    val isSaved: Boolean = false,
     val createdAt: String = "",
     val lastSeenAt: String? = null,
     val online: Boolean = false,
@@ -183,6 +184,7 @@ data class SendMessageRequest(
     val notificationPreviewEncryptedHeader: String? = null,
     val poll: PollCreationRequest? = null,
     val forwardedFromName: String? = null,
+    val clientMessageId: String? = null,
 )
 
 data class EditMessageRequest(

@@ -170,9 +170,10 @@ private fun DialogUserCard(
         hasDraft && user.draftText.isNotBlank() -> "Черновик: ${user.draftText}"
         hasDraft -> "Черновик: ответ на сообщение"
         user.lastMessage.isNotBlank() -> user.lastMessage
+        user.isSaved -> "Заметки, ссылки и файлы"
         else -> "@${user.username}"
     }
-    val displayTimestamp = user.draftUpdatedAt ?: user.lastMessageAt
+    val displayTimestamp = user.lastMessageAt
 
     Box {
         ChatListRowCard(
@@ -195,27 +196,29 @@ private fun DialogUserCard(
             expanded = menuExpanded,
             onDismissRequest = { menuExpanded = false },
         ) {
-            DropdownMenuItem(
-                text = { Text(if (user.pinned) "Открепить" else "Закрепить") },
-                onClick = {
-                    menuExpanded = false
-                    onTogglePin()
-                },
-            )
-            DropdownMenuItem(
-                text = { Text(if (user.muted) "Включить звук" else "Отключить звук") },
-                onClick = {
-                    menuExpanded = false
-                    onToggleMute()
-                },
-            )
-            DropdownMenuItem(
-                text = { Text(if (user.archived) "Разархивировать" else "Архивировать") },
-                onClick = {
-                    menuExpanded = false
-                    onToggleArchive()
-                },
-            )
+            if (!user.isSaved) {
+                DropdownMenuItem(
+                    text = { Text(if (user.pinned) "Открепить" else "Закрепить") },
+                    onClick = {
+                        menuExpanded = false
+                        onTogglePin()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(if (user.muted) "Включить звук" else "Отключить звук") },
+                    onClick = {
+                        menuExpanded = false
+                        onToggleMute()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(if (user.archived) "Разархивировать" else "Архивировать") },
+                    onClick = {
+                        menuExpanded = false
+                        onToggleArchive()
+                    },
+                )
+            }
             DropdownMenuItem(
                 text = { Text("Очистить диалог", color = MaterialTheme.colorScheme.error) },
                 onClick = {

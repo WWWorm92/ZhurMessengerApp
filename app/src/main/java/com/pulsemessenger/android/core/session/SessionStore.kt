@@ -1,6 +1,7 @@
 package com.pulsemessenger.android.core.session
 
 import android.content.Context
+import com.pulsemessenger.android.core.offline.OutboxScheduler
 import com.pulsemessenger.android.core.privacy.SecurePrefs
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -8,8 +9,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.util.UUID
 
 class SessionStore(context: Context) {
-    private val securePrefs = SecurePrefs(context, "pulse_session_secure")
-    private val legacyPrefs = context.getSharedPreferences("pulse_session", Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val securePrefs = SecurePrefs(appContext, "pulse_session_secure")
+    private val legacyPrefs = appContext.getSharedPreferences("pulse_session", Context.MODE_PRIVATE)
 
     init {
         migrateLegacyValue(KEY_TOKEN)
@@ -24,13 +26,14 @@ class SessionStore(context: Context) {
     fun saveToken(token: String) {
         securePrefs.putString(KEY_TOKEN, token)
         _token.value = token
+        if (token.isNotBlank()) {
+            OutboxScheduler.enqueueNow(appContext)
+        }
     }
 
     fun ensureDeviceKey(): String {
         val existing = securePrefs.getString(KEY_DEVICE_KEY, "").trim()
-        if (existing.isNotBlank()) {
-            return existing
-        }
+        if (existing.isNotBlank()) return existing
 
         val generated = UUID.randomUUID().toString()
         securePrefs.putString(KEY_DEVICE_KEY, generated)

@@ -11,6 +11,10 @@ import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.Person
+import androidx.core.app.RemoteInput
+import androidx.core.content.LocusIdCompat
+import androidx.core.graphics.drawable.IconCompat
 import androidx.core.content.ContextCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
@@ -19,6 +23,7 @@ import com.pulsemessenger.android.PulseApp
 import com.pulsemessenger.android.R
 import com.pulsemessenger.android.core.call.CallNotificationHelper
 import com.pulsemessenger.android.core.call.ResolvedCallStore
+import com.pulsemessenger.android.core.share.ConversationShortcutPublisher
 
 class FCMService : FirebaseMessagingService() {
 
@@ -145,6 +150,7 @@ class FCMService : FirebaseMessagingService() {
             scope = scope,
             targetId = targetId,
             chatKey = chatKey,
+            senderName = senderName,
         )
     }
 
@@ -162,6 +168,7 @@ class FCMService : FirebaseMessagingService() {
             scope = "",
             targetId = 0L,
             chatKey = "",
+            senderName = "",
         )
     }
 
@@ -174,6 +181,7 @@ class FCMService : FirebaseMessagingService() {
         scope: String,
         targetId: Long,
         chatKey: String,
+        senderName: String,
     ) {
         createChannelIfNeeded()
 
@@ -204,6 +212,13 @@ class FCMService : FirebaseMessagingService() {
             openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or
                 PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val bubblePendingIntent = PendingIntent.getActivity(
+            this,
+            notificationId + 300_000,
+            Intent(openIntent),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
         )
 
         val readPendingIntent =
@@ -241,19 +256,59 @@ class FCMService : FirebaseMessagingService() {
                 null
             }
 
+        val replyPendingIntent = if (scope in setOf("dm", "room") && targetId > 0L) {
+            val replyIntent = Intent(this, MessageReplyReceiver::class.java).apply {
+                putExtra(MessageReplyReceiver.EXTRA_SCOPE, scope)
+                putExtra(MessageReplyReceiver.EXTRA_TARGET_ID, targetId)
+                putExtra(MessageReplyReceiver.EXTRA_CHAT_KEY, chatKey)
+                putExtra(MessageReplyReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+            }
+            PendingIntent.getBroadcast(
+                this,
+                notificationId + 200_000,
+                replyIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+            )
+        } else null
+
+        val remoteInput = RemoteInput.Builder(MessageReplyReceiver.KEY_TEXT_REPLY)
+            .setLabel("Ответить")
+            .build()
+
         val largeIcon = BitmapFactory.decodeResource(
             resources,
             R.mipmap.ic_launcher,
         )
 
-        val inboxStyle = NotificationCompat.InboxStyle()
-            .setBigContentTitle(title)
+        val me = Person.Builder()
+            .setName("Вы")
+            .setKey("zhuravlik-me")
+            .build()
+        val peer = Person.Builder()
+            .setName(senderName.ifBlank { title.ifBlank { "Собеседник" } })
+            .setKey("$scope:$targetId")
+            .setImportant(true)
+            .build()
+        val messagingStyle = NotificationCompat.MessagingStyle(me)
+            .setConversationTitle(if (scope == "room") title else null)
+            .setGroupConversation(scope == "room")
+        lines.takeLast(8).forEach { line ->
+            messagingStyle.addMessage(
+                NotificationCompat.MessagingStyle.Message(
+                    line,
+                    System.currentTimeMillis(),
+                    peer,
+                )
+            )
+        }
 
-        lines.takeLast(5).forEach(inboxStyle::addLine)
-
-        if (lines.size > 1) {
-            inboxStyle.setSummaryText(
-                "${lines.size} новых сообщений",
+        if (scope in setOf("dm", "room") && targetId > 0L) {
+            ConversationShortcutPublisher.ensureNotificationShortcut(
+                context = this,
+                scope = scope,
+                targetId = targetId,
+                title = title,
+                senderName = senderName,
             )
         }
 
@@ -265,7 +320,7 @@ class FCMService : FirebaseMessagingService() {
             .setLargeIcon(largeIcon)
             .setContentTitle(title)
             .setContentText(body)
-            .setStyle(inboxStyle)
+            .setStyle(messagingStyle)
             .setSubText("Zhuravlik")
             .setAutoCancel(true)
             .setContentIntent(openPendingIntent)
@@ -277,6 +332,40 @@ class FCMService : FirebaseMessagingService() {
             .setOnlyAlertOnce(lines.size > 1)
             .setNumber(lines.size)
             .setGroup("pulse_messages")
+
+        if (scope in setOf("dm", "room") && targetId > 0L) {
+            builder
+                .setShortcutId(ConversationShortcutPublisher.shortcutId(scope, targetId))
+                .setLocusId(LocusIdCompat(chatKey.ifBlank { "$scope:$targetId" }))
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                builder.setBubbleMetadata(
+                    NotificationCompat.BubbleMetadata.Builder(
+                        bubblePendingIntent,
+                        IconCompat.createWithResource(this, R.mipmap.ic_launcher_round),
+                    )
+                        .setDesiredHeight(640)
+                        .setAutoExpandBubble(false)
+                        .setSuppressNotification(false)
+                        .build()
+                )
+            }
+        }
+
+        if (replyPendingIntent != null) {
+            builder.addAction(
+                NotificationCompat.Action.Builder(
+                    R.mipmap.ic_launcher_round,
+                    "Ответить",
+                    replyPendingIntent,
+                )
+                    .addRemoteInput(remoteInput)
+                    .setAllowGeneratedReplies(true)
+                    .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
+                    .setShowsUserInterface(false)
+                    .build()
+            )
+        }
 
         if (readPendingIntent != null) {
             builder.addAction(
