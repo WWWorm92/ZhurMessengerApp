@@ -119,10 +119,14 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import com.pulsemessenger.android.ui.ChatComposerTextField
 import com.pulsemessenger.android.ui.ReplyContextBar
 import com.pulsemessenger.android.ui.MessageMetaRow
 import com.pulsemessenger.android.core.notification.PulseNotificationStore
+import com.pulsemessenger.android.PulseApp
+import com.pulsemessenger.android.core.network.ChatPreferencesDto
+import com.pulsemessenger.android.core.sync.ChatSyncRepository
 import com.pulsemessenger.android.ui.AttachmentPickerSheetContent
 import com.pulsemessenger.android.ui.createCameraImageUri
 
@@ -156,6 +160,41 @@ fun DmChatScreen(
     val uriHandler = LocalUriHandler.current
     val haptic = LocalHapticFeedback.current
     val context = LocalContext.current
+    val app = PulseApp.instance
+    val chatSyncRepository = remember {
+        ChatSyncRepository(app.networkProvider, app.sessionStore)
+    }
+    var showChatSettings by remember { mutableStateOf(false) }
+    var chatPreferences by remember(peer.id) {
+        mutableStateOf(
+            ChatPreferencesDto(
+                scope = "dm",
+                targetId = peer.id,
+                pinned = peer.pinned,
+                muted = peer.muted,
+                archived = peer.archived,
+                muteUntil = peer.muteUntil,
+                notificationPreview = peer.notificationPreview,
+                wallpaper = peer.wallpaper,
+                bubbleColor = peer.bubbleColor,
+                saveMedia = peer.saveMedia,
+            )
+        )
+    }
+    val outgoingBubblePalette = dmOutgoingBubblePalette(chatPreferences.bubbleColor)
+    val chatWallpaper = dmChatWallpaper(chatPreferences.wallpaper)
+
+    DmDraftSyncEffect(
+        peerId = peer.id,
+        viewModel = viewModel,
+        repository = chatSyncRepository,
+    )
+
+    LaunchedEffect(peer.id) {
+        chatSyncRepository.loadPreferences("dm", peer.id)
+            .onSuccess { chatPreferences = it }
+    }
+
     val messageListItems = remember(viewModel.messages) {
         buildDmMessageListItems(viewModel.messages)
     }
@@ -235,6 +274,7 @@ fun DmChatScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(chatWallpaper)
             .pointerInput(onBack) {
                 val edgeWidth = with(density) { 72.dp.toPx() }
                 val trigger = with(density) { 96.dp.toPx() }
@@ -357,6 +397,10 @@ fun DmChatScreen(
 
                     IconButton(onClick = onOpenSearch) {
                         Icon(Icons.Default.Search, contentDescription = "Поиск")
+                    }
+
+                    IconButton(onClick = { showChatSettings = true }) {
+                        Icon(Icons.Default.Settings, contentDescription = "Настройки чата")
                     }
                 }
             }
@@ -485,7 +529,6 @@ fun DmChatScreen(
                             message = message,
                             albumMessages = albumMessages,
                             isMine = (currentUserId != null && message.senderId == currentUserId) || message.id < 0,
-                            isEditing = viewModel.editingMessageId == message.id,
                             encryptedImagePreviewUrl = viewModel.encryptedPreviewFor(message.id),
                             isEncryptedImageAttachment = viewModel.isEncryptedImageAttachment(message),
                             onOpenImage = { selectedImage ->
@@ -520,7 +563,6 @@ fun DmChatScreen(
                             onVotePoll = { pollId, optionIds -> viewModel.votePoll(pollId, optionIds) },
                             onClosePoll = viewModel::closePoll,
                             peerLastReadAt = viewModel.peerLastReadAt,
-                            onEdit = { viewModel.beginEdit(message) },
                             onDelete = { viewModel.deleteMessage(message.id) },
                             onPin = { viewModel.pinMessage(message.id) },
                             onUnpin = { viewModel.unpinMessage() },
@@ -530,6 +572,7 @@ fun DmChatScreen(
                             isSelected = viewModel.selectedMessageIds.contains(message.id),
                             onToggleSelect = { viewModel.toggleSelection(message.id) },
                             onCallClick = onCallClick,
+                            outgoingBubblePalette = outgoingBubblePalette,
                         )
                     }
                 }
@@ -537,27 +580,6 @@ fun DmChatScreen(
         }
 
         Spacer(modifier = Modifier.height(12.dp))
-
-        if (viewModel.editingMessageId != null) {
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                )
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Редактирование", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
-                    OutlinedButton(onClick = viewModel::cancelEditing) {
-                        Text("Отмена")
-                    }
-                }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-        }
 
         if (viewModel.replyToMessageId != null) {
             ReplyContextBar(
@@ -607,7 +629,7 @@ fun DmChatScreen(
                 Box {
                     IconButton(
                         onClick = { attachMenuExpanded = true },
-                        enabled = !viewModel.isUploadingImage && viewModel.editingMessageId == null,
+                        enabled = !viewModel.isUploadingImage,
                     ) {
                         Icon(Icons.Default.AttachFile, contentDescription = "Прикрепить")
                     }
@@ -619,11 +641,7 @@ fun DmChatScreen(
                     value = viewModel.draft,
                     onValueChange = onDraftChange,
                     modifier = Modifier.weight(1f),
-                    placeholder = if (viewModel.editingMessageId != null) {
-                        "Редактирование сообщения"
-                    } else {
-                        "Сообщение"
-                    }
+                    placeholder = "Сообщение"
                 )
 
                 IconButton(onClick = { showEmojiPicker = true }) {
@@ -638,21 +656,12 @@ fun DmChatScreen(
                     enabled = !viewModel.isUploadingImage &&
                             (
                                     viewModel.draft.isNotBlank() ||
-                                            viewModel.pendingAttachments.isNotEmpty() ||
-                                            viewModel.editingMessageId != null
+                                            viewModel.pendingAttachments.isNotEmpty()
                                     ),
                 ) {
                     Icon(
-                        imageVector = if (viewModel.editingMessageId != null) {
-                            Icons.Default.Check
-                        } else {
-                            Icons.AutoMirrored.Filled.Send
-                        },
-                        contentDescription = if (viewModel.editingMessageId != null) {
-                            "Сохранить"
-                        } else {
-                            "Отправить"
-                        },
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "Отправить",
                     )
                 }
             }
@@ -738,6 +747,18 @@ fun DmChatScreen(
                     }
                 )
             }
+        }
+
+        if (showChatSettings) {
+            DmChatSettingsSheet(
+                peerName = peer.displayName,
+                peerId = peer.id,
+                initial = chatPreferences,
+                context = context,
+                repository = chatSyncRepository,
+                onSaved = { chatPreferences = it },
+                onDismiss = { showChatSettings = false },
+            )
         }
 
         if (showProfileSheet) {
@@ -875,7 +896,6 @@ private fun DmMessageBubble(
     message: DmMessageDto,
     albumMessages: List<DmMessageDto> = emptyList(),
     isMine: Boolean,
-    isEditing: Boolean,
     encryptedImagePreviewUrl: String? = null,
     isEncryptedImageAttachment: Boolean = false,
     onOpenImage: (Any) -> Unit,
@@ -889,7 +909,6 @@ private fun DmMessageBubble(
     onVotePoll: (Long, List<Long>) -> Unit,
     onClosePoll: (Long) -> Unit,
     peerLastReadAt: String?,
-    onEdit: () -> Unit,
     onDelete: () -> Unit,
     onPin: () -> Unit = {},
     onUnpin: () -> Unit = {},
@@ -899,6 +918,7 @@ private fun DmMessageBubble(
     isSelected: Boolean = false,
     onToggleSelect: () -> Unit = {},
     onCallClick: () -> Unit,
+    outgoingBubblePalette: DmOutgoingBubblePalette,
 ) {
     if (message.type.equals("call", ignoreCase = true)) {
         DmCallHistoryBubble(
@@ -999,12 +1019,19 @@ private fun DmMessageBubble(
                     ),
                     colors = CardDefaults.cardColors(
                         containerColor = if (isSelected) {
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.26f)
+                            MaterialTheme.colorScheme.primaryContainer
                         } else if (isMine) {
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)
+                            outgoingBubblePalette.container
                         } else {
                             MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)
-                        }
+                        },
+                        contentColor = if (isSelected) {
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        } else if (isMine) {
+                            outgoingBubblePalette.content
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
                     )
                 ) {
                     Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {

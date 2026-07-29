@@ -9,6 +9,7 @@ import retrofit2.http.Multipart
 import retrofit2.http.PATCH
 import retrofit2.http.Path
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Part
 import okhttp3.MultipartBody
 import okhttp3.ResponseBody
@@ -339,11 +340,40 @@ interface PulseApiService {
         @Path("userId") userId: Long,
     ): Response<GenericOkResponse>
 
+    @GET("/api/chat-prefs")
+    suspend fun chatPrefs(
+        @Header("Authorization") authorization: String,
+        @Query("scope") scope: String,
+        @Query("targetId") targetId: Long,
+    ): Response<ChatPreferencesResponse>
+
     @PATCH("/api/chat-prefs")
     suspend fun updateChatPrefs(
         @Header("Authorization") authorization: String,
         @Body body: ChatPrefsRequest,
-    ): Response<GenericOkResponse>
+    ): Response<ChatPreferencesResponse>
+
+    @GET("/api/drafts/{scope}/{targetId}")
+    suspend fun chatDraft(
+        @Header("Authorization") authorization: String,
+        @Path("scope") scope: String,
+        @Path("targetId") targetId: Long,
+    ): Response<ChatDraftResponse>
+
+    @PUT("/api/drafts/{scope}/{targetId}")
+    suspend fun saveChatDraft(
+        @Header("Authorization") authorization: String,
+        @Path("scope") scope: String,
+        @Path("targetId") targetId: Long,
+        @Body body: UpsertChatDraftRequest,
+    ): Response<ChatDraftResponse>
+
+    @DELETE("/api/drafts/{scope}/{targetId}")
+    suspend fun deleteChatDraft(
+        @Header("Authorization") authorization: String,
+        @Path("scope") scope: String,
+        @Path("targetId") targetId: Long,
+    ): Response<ChatDraftResponse>
 
     @POST("/api/rooms/{roomId}/join")
     suspend fun joinRoom(

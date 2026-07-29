@@ -50,6 +50,14 @@ data class DialogUserDto(
     val pinned: Boolean = false,
     val muted: Boolean = false,
     val archived: Boolean = false,
+    val muteUntil: String? = null,
+    val notificationPreview: Boolean = true,
+    val wallpaper: String = "default",
+    val bubbleColor: String = "blue",
+    val saveMedia: Boolean = false,
+    val draftText: String = "",
+    val draftReplyToMessageId: Long? = null,
+    val draftUpdatedAt: String? = null,
 )
 
 data class UsersResponse(
@@ -209,6 +217,14 @@ data class RoomDto(
     val pinned: Boolean = false,
     val muted: Boolean = false,
     val archived: Boolean = false,
+    val muteUntil: String? = null,
+    val notificationPreview: Boolean = true,
+    val wallpaper: String = "default",
+    val bubbleColor: String = "blue",
+    val saveMedia: Boolean = false,
+    val draftText: String = "",
+    val draftReplyToMessageId: Long? = null,
+    val draftUpdatedAt: String? = null,
 )
 
 data class RoomsResponse(
@@ -398,6 +414,49 @@ data class ChatPrefsRequest(
     val pinned: Boolean? = null,
     val muted: Boolean? = null,
     val archived: Boolean? = null,
+    val muteUntil: String? = null,
+    val notificationPreview: Boolean? = null,
+    val wallpaper: String? = null,
+    val bubbleColor: String? = null,
+    val saveMedia: Boolean? = null,
+)
+
+data class ChatPreferencesDto(
+    val scope: String = "dm",
+    val targetId: Long = 0,
+    val pinned: Boolean = false,
+    val muted: Boolean = false,
+    val mutedForever: Boolean = false,
+    val archived: Boolean = false,
+    val muteUntil: String? = null,
+    val notificationPreview: Boolean = true,
+    val wallpaper: String = "default",
+    val bubbleColor: String = "blue",
+    val saveMedia: Boolean = false,
+)
+
+data class ChatPreferencesResponse(
+    val ok: Boolean = true,
+    val preferences: ChatPreferencesDto = ChatPreferencesDto(),
+)
+
+data class ChatDraftDto(
+    val scope: String = "dm",
+    val targetId: Long = 0,
+    val content: String = "",
+    val replyToMessageId: Long? = null,
+    val updatedAt: String? = null,
+    val deleted: Boolean = false,
+)
+
+data class ChatDraftResponse(
+    val ok: Boolean = true,
+    val draft: ChatDraftDto? = null,
+)
+
+data class UpsertChatDraftRequest(
+    val content: String,
+    val replyToMessageId: Long? = null,
 )
 
 data class ErrorResponse(

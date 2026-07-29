@@ -5,8 +5,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.pulsemessenger.android.core.network.ChatPreferencesDto
 import com.pulsemessenger.android.core.network.DialogUserDto
 import com.pulsemessenger.android.core.network.DmMessageDto
+import com.pulsemessenger.android.core.sync.ChatPreferencesBus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -18,12 +20,50 @@ class DialogsViewModel(
     var isLoading by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
 
+    init {
+        viewModelScope.launch {
+            ChatPreferencesBus.updates.collect { preferences ->
+                if (preferences.scope == "dm") {
+                    applyPreferences(preferences)
+                }
+            }
+        }
+    }
+
+    private fun sortedUsers(items: List<DialogUserDto>): List<DialogUserDto> {
+        return items.sortedWith(
+            compareByDescending<DialogUserDto> { it.pinned }
+                .thenByDescending { it.draftUpdatedAt ?: it.lastMessageAt ?: "" }
+        )
+    }
+
+    private fun applyPreferences(preferences: ChatPreferencesDto) {
+        users = sortedUsers(
+            users.map { user ->
+                if (user.id != preferences.targetId) {
+                    user
+                } else {
+                    user.copy(
+                        pinned = preferences.pinned,
+                        muted = preferences.muted,
+                        archived = preferences.archived,
+                        muteUntil = preferences.muteUntil,
+                        notificationPreview = preferences.notificationPreview,
+                        wallpaper = preferences.wallpaper,
+                        bubbleColor = preferences.bubbleColor,
+                        saveMedia = preferences.saveMedia,
+                    )
+                }
+            }
+        )
+    }
+
     fun togglePin(userId: Long) {
         val user = users.firstOrNull { it.id == userId } ?: return
         viewModelScope.launch {
             repository.updateDmChatPrefs(userId, pinned = !user.pinned)
                 .onSuccess {
-                    users = users.map { if (it.id == userId) it.copy(pinned = !user.pinned) else it }
+                    users = sortedUsers(users.map { if (it.id == userId) it.copy(pinned = !user.pinned) else it })
                 }
         }
     }
@@ -63,27 +103,17 @@ class DialogsViewModel(
         error = null
         viewModelScope.launch {
             withContext(Dispatchers.IO) { repository.loadUsers() }
-                .onSuccess { loaded ->
-                    users = loaded.sortedWith(
-                        compareByDescending<DialogUserDto> { it.pinned }
-                            .thenByDescending { it.lastMessageAt ?: "" }
-                    )
-                }
+                .onSuccess { loaded -> users = sortedUsers(loaded) }
                 .onFailure { error = it.message ?: "Failed to load dialogs" }
             isLoading = false
         }
     }
 
     fun onPresenceUpdate(onlineUserIds: Set<Long>) {
-        if (users.isEmpty()) {
-            return
-        }
+        if (users.isEmpty()) return
         users = users.map { user ->
-            if (user.online == onlineUserIds.contains(user.id)) {
-                user
-            } else {
-                user.copy(online = onlineUserIds.contains(user.id))
-            }
+            if (user.online == onlineUserIds.contains(user.id)) user
+            else user.copy(online = onlineUserIds.contains(user.id))
         }
     }
 
@@ -95,7 +125,12 @@ class DialogsViewModel(
         applyDmEvent(message, currentUserId, activePeerId = null, incrementUnread = false)
     }
 
-    private fun applyDmEvent(message: DmMessageDto, currentUserId: Long?, activePeerId: Long?, incrementUnread: Boolean) {
+    private fun applyDmEvent(
+        message: DmMessageDto,
+        currentUserId: Long?,
+        activePeerId: Long?,
+        incrementUnread: Boolean,
+    ) {
         val myUserId = currentUserId ?: return
         val peerId = when (myUserId) {
             message.senderId -> message.receiverId
@@ -116,21 +151,20 @@ class DialogsViewModel(
             lastMessageType = message.type,
             lastMessageAt = message.createdAt,
             unreadCount = nextUnread,
+            draftText = if (message.senderId == myUserId) "" else existing.draftText,
+            draftReplyToMessageId = if (message.senderId == myUserId) null else existing.draftReplyToMessageId,
+            draftUpdatedAt = if (message.senderId == myUserId) null else existing.draftUpdatedAt,
         )
         users = if (incrementUnread) {
-            listOf(updated) + users.filterNot { it.id == peerId }
+            sortedUsers(listOf(updated) + users.filterNot { it.id == peerId })
         } else {
-            users.map { if (it.id == peerId) updated else it }
+            sortedUsers(users.map { if (it.id == peerId) updated else it })
         }
     }
 
     fun markDialogOpened(peerId: Long) {
         users = users.map { user ->
-            if (user.id == peerId && user.unreadCount > 0) {
-                user.copy(unreadCount = 0)
-            } else {
-                user
-            }
+            if (user.id == peerId && user.unreadCount > 0) user.copy(unreadCount = 0) else user
         }
     }
 
@@ -144,9 +178,7 @@ class DialogsViewModel(
                     lastMessageAt = null,
                     unreadCount = 0,
                 )
-            } else {
-                user
-            }
+            } else user
         }
     }
 
