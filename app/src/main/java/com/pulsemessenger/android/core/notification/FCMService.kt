@@ -119,6 +119,12 @@ class FCMService : FirebaseMessagingService() {
             data["chatKey"].takeUnless { it.isNullOrBlank() }
                 ?: "$scope:$targetId"
 
+        if (ActiveChatTracker.shouldSuppressNotification(scope, targetId)) {
+            PulseNotificationStore.clear(this, chatKey)
+            Log.d("PUSH", "Notification suppressed for active chat $chatKey")
+            return
+        }
+
         val title =
             data["title"].orEmpty().ifBlank { "Zhuravlik" }
         val senderName = data["senderName"].orEmpty()

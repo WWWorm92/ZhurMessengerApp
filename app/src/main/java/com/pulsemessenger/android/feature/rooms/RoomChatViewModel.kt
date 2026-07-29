@@ -19,6 +19,7 @@ import com.pulsemessenger.android.core.network.RoomMessageSenderDto
 import com.pulsemessenger.android.core.network.RoomDto
 import com.pulsemessenger.android.core.network.RoomMessageDto
 import com.pulsemessenger.android.core.network.SharedAttachmentDto
+import com.pulsemessenger.android.core.notification.ActiveChatTracker
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -81,6 +82,10 @@ class RoomChatViewModel(
     }
 
     fun openRoom(targetRoom: RoomDto) {
+        room?.id
+            ?.takeIf { it != targetRoom.id }
+            ?.let { ActiveChatTracker.leaveChat("room", it) }
+        ActiveChatTracker.enterChat("room", targetRoom.id)
         room = targetRoom
         profileAttachments = null
         profileAttachmentsError = null
@@ -93,6 +98,7 @@ class RoomChatViewModel(
 
     fun closeRoom() {
         stopTypingJob?.cancel()
+        room?.id?.let { ActiveChatTracker.leaveChat("room", it) }
         room = null
         messages = emptyList()
         draft = ""
@@ -262,7 +268,7 @@ class RoomChatViewModel(
 
                     result
                         .onSuccess { message ->
-                            upsertMessage(message)
+                            upsertMessage(message, requestScroll = true)
                         }
                         .onFailure {
                             error = it.message ?: "Не удалось отправить вложение"
@@ -293,7 +299,7 @@ class RoomChatViewModel(
         viewModelScope.launch {
             repository.sendMessage(currentRoom.id, content, replyToMessageId = replyingTo)
                 .onSuccess { message ->
-                    upsertMessage(message)
+                    upsertMessage(message, requestScroll = true)
                 }
                 .onFailure {
                     draft = previousDraft
@@ -319,7 +325,7 @@ class RoomChatViewModel(
                 poll = poll,
             )
                 .onSuccess { message ->
-                    upsertMessage(message)
+                    upsertMessage(message, requestScroll = true)
                 }
                 .onFailure {
                     error = it.message ?: "Failed to send poll"
@@ -560,7 +566,10 @@ class RoomChatViewModel(
         patchPoll(payload.toPollDto())
     }
 
-    private fun upsertMessage(message: RoomMessageDto) {
+    private fun upsertMessage(
+        message: RoomMessageDto,
+        requestScroll: Boolean = false,
+    ) {
         val existed = messages.any { it.id == message.id }
 
         memberNamesById = memberNamesById + (message.sender.id to message.sender.displayName)
@@ -569,7 +578,7 @@ class RoomChatViewModel(
             .distinctBy { it.id }
             .sortedBy { it.id }
 
-        if (!existed) {
+        if (requestScroll && !existed) {
             shouldScrollToBottom = true
         }
     }
@@ -627,6 +636,11 @@ class RoomChatViewModel(
                     error = it.message ?: "Failed to edit room message"
                 }
         }
+    }
+
+    override fun onCleared() {
+        room?.id?.let { ActiveChatTracker.leaveChat("room", it) }
+        super.onCleared()
     }
 
     private fun JSONObject.toRoomMessageDto(): RoomMessageDto {

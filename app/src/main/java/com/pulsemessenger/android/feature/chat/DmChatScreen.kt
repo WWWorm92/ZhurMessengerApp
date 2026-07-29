@@ -63,6 +63,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -123,6 +124,7 @@ import androidx.compose.material.icons.filled.Settings
 import com.pulsemessenger.android.ui.ChatComposerTextField
 import com.pulsemessenger.android.ui.ReplyContextBar
 import com.pulsemessenger.android.ui.MessageMetaRow
+import com.pulsemessenger.android.core.notification.ActiveChatTracker
 import com.pulsemessenger.android.core.notification.PulseNotificationStore
 import com.pulsemessenger.android.PulseApp
 import com.pulsemessenger.android.core.network.ChatPreferencesDto
@@ -202,6 +204,13 @@ fun DmChatScreen(
         PulseNotificationStore.clear(context, "dm:${peer.id}")
     }
 
+    DisposableEffect(peer.id) {
+        ActiveChatTracker.enterChat("dm", peer.id)
+        onDispose {
+            ActiveChatTracker.leaveChat("dm", peer.id)
+        }
+    }
+
     LaunchedEffect(context, viewModel.messages) {
         viewModel.preloadEncryptedImagePreviews(context)
     }
@@ -232,15 +241,49 @@ fun DmChatScreen(
         cameraImageUri = null
     }
 
+    var previousMessageCount by remember(peer.id) {
+        mutableStateOf(viewModel.messages.size)
+    }
+
     LaunchedEffect(viewModel.shouldScrollToBottom, viewModel.messages.size, viewModel.isLoading) {
+        val messageCount = viewModel.messages.size
+        val addedNewMessage = messageCount > previousMessageCount
+
         if (
             viewModel.shouldScrollToBottom &&
             !viewModel.isLoading &&
             messageListItems.isNotEmpty()
         ) {
-            listState.animateScrollToItem(messageListItems.lastIndex)
+            val lastMessage = viewModel.messages.lastOrNull()
+            val layoutInfo = listState.layoutInfo
+            val lastVisibleIndex = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val isNearBottom =
+                layoutInfo.totalItemsCount == 0 ||
+                    lastVisibleIndex >= (layoutInfo.totalItemsCount - 2).coerceAtLeast(0)
+            val isOwnMessage =
+                lastMessage != null &&
+                    (
+                        lastMessage.id < 0L ||
+                            (currentUserId != null && lastMessage.senderId == currentUserId)
+                    )
+            val shouldFollowNewMessage =
+                previousMessageCount == 0 ||
+                    !addedNewMessage ||
+                    isOwnMessage ||
+                    isNearBottom
+
+            if (shouldFollowNewMessage) {
+                if (addedNewMessage && !isOwnMessage && previousMessageCount > 0) {
+                    listState.scrollToItem(messageListItems.lastIndex)
+                } else {
+                    listState.animateScrollToItem(messageListItems.lastIndex)
+                }
+            }
+
             viewModel.consumeScrollToBottom()
         }
+
+        previousMessageCount = messageCount
     }
 
     LaunchedEffect(listState) {
@@ -527,57 +570,55 @@ fun DmChatScreen(
                         Spacer(modifier = Modifier.height(4.dp))
                     }
 
-                    Box(modifier = Modifier.animateItem()) {
-                        DmMessageBubble(
-                            message = message,
-                            albumMessages = albumMessages,
-                            isMine = (currentUserId != null && message.senderId == currentUserId) || message.id < 0,
-                            encryptedImagePreviewUrl = viewModel.encryptedPreviewFor(message.id),
-                            isEncryptedImageAttachment = viewModel.isEncryptedImageAttachment(message),
-                            onOpenImage = { selectedImage ->
-                                val images = viewModel.messages
-                                    .filter { it.deletedAt == null && it.imageUrl.isNotBlank() }
-                                    .map { resolveBackendMediaUrl(it.imageUrl) }
+                    DmMessageBubble(
+                        message = message,
+                        albumMessages = albumMessages,
+                        isMine = (currentUserId != null && message.senderId == currentUserId) || message.id < 0,
+                        encryptedImagePreviewUrl = viewModel.encryptedPreviewFor(message.id),
+                        isEncryptedImageAttachment = viewModel.isEncryptedImageAttachment(message),
+                        onOpenImage = { selectedImage ->
+                            val images = viewModel.messages
+                                .filter { it.deletedAt == null && it.imageUrl.isNotBlank() }
+                                .map { resolveBackendMediaUrl(it.imageUrl) }
 
-                                val currentIndex = images.indexOf(selectedImage).takeIf { it >= 0 } ?: 0
+                            val currentIndex = images.indexOf(selectedImage).takeIf { it >= 0 } ?: 0
 
-                                fullscreenImageModels = images
-                                fullscreenImageStartIndex = currentIndex
-                                fullscreenImageModel = selectedImage
-                            },
-                            onOpenVideo = { url -> fullscreenVideoUrl = url },
-                            onOpenFile = { fileMessage ->
-                                viewModel.openAttachment(
-                                    context = context,
-                                    message = fileMessage,
-                                    onOpenImage = { decryptedImageUri ->
-                                        fullscreenImageModels = listOf(decryptedImageUri)
-                                        fullscreenImageStartIndex = 0
-                                        fullscreenImageModel = decryptedImageUri
-                                    },
-                                    onOpenUrl = { url -> uriHandler.openUri(url) },
-                                )
-                            },
-                            onRetrySend = { viewModel.retryPendingMessage(message.id, context) },
-                            quickReactions = viewModel.quickReactions,
-                            onToggleReaction = { emoji -> viewModel.toggleReaction(message.id, emoji) },
-                            currentUserId = currentUserId,
-                            currentUserIsAdmin = currentUserIsAdmin,
-                            onVotePoll = { pollId, optionIds -> viewModel.votePoll(pollId, optionIds) },
-                            onClosePoll = viewModel::closePoll,
-                            peerLastReadAt = viewModel.peerLastReadAt,
-                            onDelete = { viewModel.deleteMessage(message.id) },
-                            onPin = { viewModel.pinMessage(message.id) },
-                            onUnpin = { viewModel.unpinMessage() },
-                            onReply = { viewModel.beginReply(message) },
-                            onSelect = { viewModel.beginSelect(message.id) },
-                            selectionMode = viewModel.selectionMode,
-                            isSelected = viewModel.selectedMessageIds.contains(message.id),
-                            onToggleSelect = { viewModel.toggleSelection(message.id) },
-                            onCallClick = onCallClick,
-                            outgoingBubblePalette = outgoingBubblePalette,
-                        )
-                    }
+                            fullscreenImageModels = images
+                            fullscreenImageStartIndex = currentIndex
+                            fullscreenImageModel = selectedImage
+                        },
+                        onOpenVideo = { url -> fullscreenVideoUrl = url },
+                        onOpenFile = { fileMessage ->
+                            viewModel.openAttachment(
+                                context = context,
+                                message = fileMessage,
+                                onOpenImage = { decryptedImageUri ->
+                                    fullscreenImageModels = listOf(decryptedImageUri)
+                                    fullscreenImageStartIndex = 0
+                                    fullscreenImageModel = decryptedImageUri
+                                },
+                                onOpenUrl = { url -> uriHandler.openUri(url) },
+                            )
+                        },
+                        onRetrySend = { viewModel.retryPendingMessage(message.id, context) },
+                        quickReactions = viewModel.quickReactions,
+                        onToggleReaction = { emoji -> viewModel.toggleReaction(message.id, emoji) },
+                        currentUserId = currentUserId,
+                        currentUserIsAdmin = currentUserIsAdmin,
+                        onVotePoll = { pollId, optionIds -> viewModel.votePoll(pollId, optionIds) },
+                        onClosePoll = viewModel::closePoll,
+                        peerLastReadAt = viewModel.peerLastReadAt,
+                        onDelete = { viewModel.deleteMessage(message.id) },
+                        onPin = { viewModel.pinMessage(message.id) },
+                        onUnpin = { viewModel.unpinMessage() },
+                        onReply = { viewModel.beginReply(message) },
+                        onSelect = { viewModel.beginSelect(message.id) },
+                        selectionMode = viewModel.selectionMode,
+                        isSelected = viewModel.selectedMessageIds.contains(message.id),
+                        onToggleSelect = { viewModel.toggleSelection(message.id) },
+                        onCallClick = onCallClick,
+                        outgoingBubblePalette = outgoingBubblePalette,
+                    )
                 }
             }
         }

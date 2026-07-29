@@ -13,6 +13,7 @@ import com.pulsemessenger.android.core.call.CallNotificationAction
 import com.pulsemessenger.android.core.call.IncomingCallAlert
 import com.pulsemessenger.android.core.call.CallForegroundService
 import com.pulsemessenger.android.core.call.ProximityScreenController
+import com.pulsemessenger.android.core.notification.ActiveChatTracker
 import com.pulsemessenger.android.core.notification.PulseNotificationStore
 import com.pulsemessenger.android.ui.PulseAndroidApp
 import com.pulsemessenger.android.ui.theme.PulseAndroidTheme
@@ -54,10 +55,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        ActiveChatTracker.setAppVisible(true)
         startCallServiceMonitor()
     }
 
     override fun onPause() {
+        ActiveChatTracker.setAppVisible(false)
         // Last synchronous attempt while the Activity is still in the
         // foreground-eligible lifecycle state. Starting a microphone FGS
         // from onStop is too late on Android 14+.
