@@ -513,7 +513,6 @@ fun DmChatScreen(
                                 )
                             },
                             onRetrySend = { viewModel.retryPendingMessage(message.id, context) },
-                            onCallClick = onCallClick,
                             quickReactions = viewModel.quickReactions,
                             onToggleReaction = { emoji -> viewModel.toggleReaction(message.id, emoji) },
                             currentUserId = currentUserId,
@@ -530,6 +529,7 @@ fun DmChatScreen(
                             selectionMode = viewModel.selectionMode,
                             isSelected = viewModel.selectedMessageIds.contains(message.id),
                             onToggleSelect = { viewModel.toggleSelection(message.id) },
+                            onCallClick = onCallClick,
                         )
                     }
                 }
@@ -872,7 +872,6 @@ private fun PendingAttachmentsPreview(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun DmMessageBubble(
-
     message: DmMessageDto,
     albumMessages: List<DmMessageDto> = emptyList(),
     isMine: Boolean,
@@ -885,7 +884,6 @@ private fun DmMessageBubble(
     onRetrySend: () -> Unit = {},
     quickReactions: List<String>,
     onToggleReaction: (String) -> Unit,
-    onCallClick: () -> Unit,
     currentUserId: Long?,
     currentUserIsAdmin: Boolean,
     onVotePoll: (Long, List<Long>) -> Unit,
@@ -900,6 +898,7 @@ private fun DmMessageBubble(
     selectionMode: Boolean = false,
     isSelected: Boolean = false,
     onToggleSelect: () -> Unit = {},
+    onCallClick: () -> Unit,
 ) {
     if (message.type.equals("call", ignoreCase = true)) {
         DmCallHistoryBubble(
@@ -909,6 +908,7 @@ private fun DmMessageBubble(
         )
         return
     }
+
     var menuExpanded by remember(message.id) { mutableStateOf(false) }
     var confirmDelete by remember(message.id) { mutableStateOf(false) }
     val resolvedFileUrl = if (message.fileUrl.isNotBlank()) resolveChatMediaUrl(message.fileUrl) else ""

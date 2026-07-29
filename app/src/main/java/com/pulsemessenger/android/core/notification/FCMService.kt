@@ -18,41 +18,81 @@ import com.pulsemessenger.android.MainActivity
 import com.pulsemessenger.android.PulseApp
 import com.pulsemessenger.android.R
 import com.pulsemessenger.android.core.call.CallNotificationHelper
+import com.pulsemessenger.android.core.call.ResolvedCallStore
 
 class FCMService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         val app = PulseApp.instance
-        app.pushManager.onTokenRefreshed(token, app.networkProvider, app.sessionStore)
+        app.pushManager.onTokenRefreshed(
+            token,
+            app.networkProvider,
+            app.sessionStore,
+        )
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
 
-        if (data["type"] == "call") {
-            showIncomingCallNotification(data)
-            return
+        when (data["type"]) {
+            "call" -> {
+                showIncomingCallNotification(data)
+                return
+            }
+
+            "call_resolved" -> {
+                resolveIncomingCall(data)
+                return
+            }
+
+            "message" -> {
+                showGroupedMessageNotification(data)
+                return
+            }
         }
 
-        if (data["type"] == "message") {
-            showGroupedMessageNotification(data)
-            return
-        }
-
-        val title = message.notification?.title ?: data["title"] ?: "Zhuravlik"
-        val body = message.notification?.body ?: data["body"] ?: ""
+        val title =
+            message.notification?.title ?: data["title"] ?: "Zhuravlik"
+        val body =
+            message.notification?.body ?: data["body"] ?: ""
         val url = data["url"] ?: "/"
 
         showFallbackNotification(title, body, url)
     }
 
+    private fun resolveIncomingCall(data: Map<String, String>) {
+        val callId = data["callId"].orEmpty()
+        if (callId.isBlank()) return
+
+        ResolvedCallStore.markResolved(this, callId)
+        CallNotificationHelper.cancelCallNotification(this, callId)
+
+        Log.d(
+            "CALL_NOTIFICATION",
+            "Resolved incoming call from push callId=$callId reason=${data["reason"].orEmpty()}",
+        )
+    }
+
     private fun showIncomingCallNotification(data: Map<String, String>) {
         val callId = data["callId"].orEmpty()
-        val fromUserId = data["fromUserId"]?.toLongOrNull() ?: return
-        val fromName = data["fromName"].orEmpty()
+        val fromUserId =
+            data["fromUserId"]?.toLongOrNull() ?: return
+
+        if (ResolvedCallStore.isResolved(this, callId)) {
+            Log.d(
+                "CALL_NOTIFICATION",
+                "Ignoring late incoming-call push callId=$callId",
+            )
+            return
+        }
+
+        val fromName = data["fromName"]
+            .orEmpty()
             .ifBlank { data["senderName"].orEmpty() }
             .ifBlank { "Pulse" }
-        val fromAvatarUrl = data["fromAvatarUrl"].orEmpty()
+
+        val fromAvatarUrl = data["fromAvatarUrl"]
+            .orEmpty()
             .ifBlank { data["avatarUrl"].orEmpty() }
 
         CallNotificationHelper.showIncomingCall(
@@ -64,21 +104,29 @@ class FCMService : FirebaseMessagingService() {
         )
     }
 
-    private fun showGroupedMessageNotification(data: Map<String, String>) {
+    private fun showGroupedMessageNotification(
+        data: Map<String, String>,
+    ) {
         val scope = data["scope"].orEmpty()
-        val targetId = data["targetId"]?.toLongOrNull() ?: return
-        val chatKey = data["chatKey"].takeUnless { it.isNullOrBlank() } ?: "$scope:$targetId"
+        val targetId =
+            data["targetId"]?.toLongOrNull() ?: return
+        val chatKey =
+            data["chatKey"].takeUnless { it.isNullOrBlank() }
+                ?: "$scope:$targetId"
 
-        val title = data["title"].orEmpty().ifBlank { "Zhuravlik" }
+        val title =
+            data["title"].orEmpty().ifBlank { "Zhuravlik" }
         val senderName = data["senderName"].orEmpty()
-        val body = data["body"].orEmpty().ifBlank { "Новое сообщение" }
+        val body =
+            data["body"].orEmpty().ifBlank { "Новое сообщение" }
         val url = data["url"] ?: "/"
 
-        val line = if (scope == "room" && senderName.isNotBlank()) {
-            "$senderName: $body"
-        } else {
-            body
-        }
+        val line =
+            if (scope == "room" && senderName.isNotBlank()) {
+                "$senderName: $body"
+            } else {
+                body
+            }
 
         val lines = PulseNotificationStore.addMessage(
             context = this,
@@ -88,7 +136,8 @@ class FCMService : FirebaseMessagingService() {
         )
 
         showNotification(
-            notificationId = PulseNotificationStore.notificationId(chatKey),
+            notificationId =
+                PulseNotificationStore.notificationId(chatKey),
             title = title,
             body = lines.lastOrNull().orEmpty(),
             url = url,
@@ -99,7 +148,11 @@ class FCMService : FirebaseMessagingService() {
         )
     }
 
-    private fun showFallbackNotification(title: String, body: String, url: String) {
+    private fun showFallbackNotification(
+        title: String,
+        body: String,
+        url: String,
+    ) {
         showNotification(
             notificationId = System.currentTimeMillis().toInt(),
             title = title,
@@ -126,14 +179,22 @@ class FCMService : FirebaseMessagingService() {
 
         if (
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) != PackageManager.PERMISSION_GRANTED
         ) {
-            Log.w("PUSH", "POST_NOTIFICATIONS permission is not granted")
+            Log.w(
+                "PUSH",
+                "POST_NOTIFICATIONS permission is not granted",
+            )
             return
         }
 
         val openIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            flags =
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("url", url)
         }
 
@@ -141,41 +202,65 @@ class FCMService : FirebaseMessagingService() {
             this,
             notificationId,
             openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_UPDATE_CURRENT or
+                PendingIntent.FLAG_IMMUTABLE,
         )
 
-        val readPendingIntent = if (scope.isNotBlank() && targetId > 0 && chatKey.isNotBlank()) {
-            val readIntent = Intent(this, NotificationReadReceiver::class.java).apply {
-                action = NotificationReadReceiver.ACTION_MARK_READ
-                putExtra(NotificationReadReceiver.EXTRA_SCOPE, scope)
-                putExtra(NotificationReadReceiver.EXTRA_TARGET_ID, targetId)
-                putExtra(NotificationReadReceiver.EXTRA_CHAT_KEY, chatKey)
+        val readPendingIntent =
+            if (
+                scope.isNotBlank() &&
+                targetId > 0 &&
+                chatKey.isNotBlank()
+            ) {
+                val readIntent =
+                    Intent(this, NotificationReadReceiver::class.java).apply {
+                        action =
+                            NotificationReadReceiver.ACTION_MARK_READ
+                        putExtra(
+                            NotificationReadReceiver.EXTRA_SCOPE,
+                            scope,
+                        )
+                        putExtra(
+                            NotificationReadReceiver.EXTRA_TARGET_ID,
+                            targetId,
+                        )
+                        putExtra(
+                            NotificationReadReceiver.EXTRA_CHAT_KEY,
+                            chatKey,
+                        )
+                    }
+
+                PendingIntent.getBroadcast(
+                    this,
+                    notificationId + 100_000,
+                    readIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or
+                        PendingIntent.FLAG_IMMUTABLE,
+                )
+            } else {
+                null
             }
 
-            PendingIntent.getBroadcast(
-                this,
-                notificationId + 100_000,
-                readIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-        } else {
-            null
-        }
-
-        val largeIcon = BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher)
+        val largeIcon = BitmapFactory.decodeResource(
+            resources,
+            R.mipmap.ic_launcher,
+        )
 
         val inboxStyle = NotificationCompat.InboxStyle()
             .setBigContentTitle(title)
 
-        lines.takeLast(5).forEach { line ->
-            inboxStyle.addLine(line)
-        }
+        lines.takeLast(5).forEach(inboxStyle::addLine)
 
         if (lines.size > 1) {
-            inboxStyle.setSummaryText("${lines.size} новых сообщений")
+            inboxStyle.setSummaryText(
+                "${lines.size} новых сообщений",
+            )
         }
 
-        val builder = NotificationCompat.Builder(this, PulseNotificationStore.CHANNEL_ID)
+        val builder = NotificationCompat.Builder(
+            this,
+            PulseNotificationStore.CHANNEL_ID,
+        )
             .setSmallIcon(R.mipmap.ic_launcher_round)
             .setLargeIcon(largeIcon)
             .setContentTitle(title)
@@ -197,22 +282,24 @@ class FCMService : FirebaseMessagingService() {
             builder.addAction(
                 R.mipmap.ic_launcher_round,
                 "Прочитать",
-                readPendingIntent
+                readPendingIntent,
             )
         }
 
-        NotificationManagerCompat.from(this).notify(notificationId, builder.build())
+        NotificationManagerCompat.from(this)
+            .notify(notificationId, builder.build())
     }
 
     private fun createChannelIfNeeded() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
 
-        val manager = getSystemService(NotificationManager::class.java)
+        val manager =
+            getSystemService(NotificationManager::class.java)
 
         val channel = NotificationChannel(
             PulseNotificationStore.CHANNEL_ID,
             "Сообщения",
-            NotificationManager.IMPORTANCE_HIGH
+            NotificationManager.IMPORTANCE_HIGH,
         ).apply {
             description = "Уведомления о новых сообщениях"
         }

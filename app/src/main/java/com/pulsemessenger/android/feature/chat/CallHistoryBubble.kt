@@ -14,77 +14,108 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.pulsemessenger.android.core.network.DmMessageDto
 import com.pulsemessenger.android.ui.formatMessageTime
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Call
-import androidx.compose.material3.Icon
 
 private data class CallHistoryPresentation(
     val title: String,
     val subtitle: String,
-    val accentKind: String,
+    val kind: String,
     val direction: String,
 )
 
 private fun formatCallDuration(totalSeconds: Int): String {
     val safe = totalSeconds.coerceAtLeast(0)
-    val minutes = safe / 60
-    val seconds = safe % 60
-    return "$minutes:${seconds.toString().padStart(2, '0')}"
+    return "${safe / 60}:${(safe % 60).toString().padStart(2, '0')}"
 }
 
-private fun callPresentation(
+private fun extractDuration(text: String): String {
+    return Regex("""\b\d+:\d{2}\b""")
+        .find(text)
+        ?.value
+        .orEmpty()
+}
+
+private fun inferCallStatus(text: String): String {
+    val normalized = text.lowercase()
+    return when {
+        "заверш" in normalized || "длительность" in normalized -> "completed"
+        "отклон" in normalized -> "rejected"
+        "пропущ" in normalized || "нет ответа" in normalized -> "missed"
+        "отмен" in normalized -> "cancelled"
+        else -> ""
+    }
+}
+
+private fun callHistoryPresentation(
     message: DmMessageDto,
     isMine: Boolean,
 ): CallHistoryPresentation {
+    val text = message.content.trim()
+    val status = message.callStatus
+        .trim()
+        .lowercase()
+        .ifBlank { inferCallStatus(text) }
+
     val direction = if (isMine) "↗" else "↙"
 
-    return when (message.callStatus.lowercase()) {
-        "completed" -> CallHistoryPresentation(
-            title = if (isMine) "Исходящий звонок" else "Входящий звонок",
-            subtitle = "Длительность ${formatCallDuration(message.callDurationSeconds)}",
-            accentKind = "success",
-            direction = direction,
-        )
+    return when (status) {
+        "completed" -> {
+            val duration = when {
+                message.callDurationSeconds > 0 -> formatCallDuration(message.callDurationSeconds)
+                else -> extractDuration(text)
+            }
+
+            CallHistoryPresentation(
+                title = if (isMine) "Исходящий звонок" else "Входящий звонок",
+                subtitle = if (duration.isNotBlank()) {
+                    "Длительность $duration"
+                } else {
+                    "Звонок завершён"
+                },
+                kind = "success",
+                direction = direction,
+            )
+        }
 
         "rejected" -> CallHistoryPresentation(
             title = if (isMine) "Звонок отклонён" else "Отклонённый звонок",
             subtitle = "Вызов не состоялся",
-            accentKind = "danger",
+            kind = "danger",
             direction = direction,
         )
 
         "missed" -> CallHistoryPresentation(
             title = if (isMine) "Нет ответа" else "Пропущенный звонок",
             subtitle = if (isMine) "Абонент не ответил" else "Вы не ответили",
-            accentKind = "danger",
+            kind = "danger",
             direction = direction,
         )
 
         "cancelled" -> CallHistoryPresentation(
             title = if (isMine) "Отменённый звонок" else "Пропущенный звонок",
             subtitle = if (isMine) "Вы отменили вызов" else "Звонок был отменён",
-            accentKind = "warning",
+            kind = "warning",
             direction = direction,
         )
 
         else -> CallHistoryPresentation(
             title = if (isMine) "Исходящий звонок" else "Входящий звонок",
-            subtitle = message.content.ifBlank { "Аудиозвонок" },
-            accentKind = "neutral",
+            subtitle = text.ifBlank { "Аудиозвонок" },
+            kind = "neutral",
             direction = direction,
         )
     }
@@ -96,9 +127,9 @@ internal fun DmCallHistoryBubble(
     isMine: Boolean,
     onCallClick: () -> Unit,
 ) {
-    val presentation = callPresentation(message, isMine)
+    val presentation = callHistoryPresentation(message, isMine)
 
-    val accent = when (presentation.accentKind) {
+    val accent = when (presentation.kind) {
         "danger" -> MaterialTheme.colorScheme.error
         "warning" -> MaterialTheme.colorScheme.tertiary
         "success" -> MaterialTheme.colorScheme.primary
@@ -143,7 +174,7 @@ internal fun DmCallHistoryBubble(
                             text = presentation.direction,
                             color = accent,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 22.sp,
+                            style = MaterialTheme.typography.titleLarge,
                         )
                     }
 

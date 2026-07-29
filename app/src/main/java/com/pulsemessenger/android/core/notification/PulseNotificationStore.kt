@@ -8,8 +8,12 @@ import org.json.JSONArray
 object PulseNotificationStore {
     private const val PREFS_NAME = "pulse_push_notifications"
     const val CHANNEL_ID = "pulse_messages"
-    const val CALL_CHANNEL_ID = "pulse_calls_v2"
-    const val ACTIVE_CALL_CHANNEL_ID = "pulse_active_call"
+
+    // New ID is intentional. Android does not allow changing sound/vibration
+    // behavior after a notification channel has already been created.
+    const val CALL_CHANNEL_ID = "pulse_calls_v3"
+
+    const val ACTIVE_CALL_CHANNEL_ID = "pulse_active_call_v2"
     const val ACTIVE_CALL_NOTIFICATION_ID = 920_001
 
     fun notificationId(chatKey: String): Int {
@@ -40,7 +44,6 @@ object PulseNotificationStore {
         }
 
         val next = (lines + line).takeLast(maxMessages)
-
         val array = JSONArray()
         next.forEach { array.put(it) }
 
