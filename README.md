@@ -1,32 +1,107 @@
-# Pulse Android
+# Pulse Messenger for Android
 
-Initial standalone Android client scaffold for Pulse Messenger.
+Android-клиент для [Pulse Messenger](https://github.com/WWWorm92/ZhurMessenger).
 
-## Current state
+Приложение я делал не как WebView-обёртку, а как отдельный нативный клиент на Kotlin и Jetpack Compose. Оно работает с тем же backend, что и веб-версия, поддерживает сообщения в реальном времени, push-уведомления, локальное хранение данных и звонки через WebRTC.
 
-- Kotlin + Jetpack Compose app shell
-- dark theme aligned with the web client
-- basic app navigation shell
-- login screen wired to current backend
-- session token stored locally
-- session restore through `/api/auth/me`
-- first dialogs list screen through `/api/users`
-- DM chat history through `/api/messages/:userId`
-- text message send for DM
-- first rooms list screen through `/api/rooms`
-- base `Socket.IO` manager scaffold for realtime
+## Что работает
 
-## Open in Android Studio
+- вход и восстановление сессии;
+- список личных диалогов и комнат;
+- личные и групповые сообщения;
+- обновление сообщений через Socket.IO;
+- статусы доставки и прочтения;
+- реакции на сообщения;
+- ответы на сообщения;
+- отправка нескольких фотографий и файлов;
+- просмотр изображений и альбомов;
+- полноэкранный просмотр медиа;
+- поиск по чатам;
+- избранные сообщения;
+- push-уведомления через Firebase Cloud Messaging;
+- локальный кеш на Room;
+- фоновые задачи через WorkManager;
+- аудио- и видеозвонки через WebRTC;
+- проверка и установка обновлений приложения;
+- светлая и тёмная темы.
 
-1. Open `android-app/` as a project.
-2. Let Android Studio sync Gradle.
-3. Create or choose an emulator/device.
-4. Run the `app` configuration.
+## Стек
 
-## Next implementation steps
+- Kotlin;
+- Jetpack Compose;
+- Material 3;
+- Retrofit и OkHttp;
+- Socket.IO;
+- Room;
+- WorkManager;
+- Firebase Cloud Messaging;
+- WebRTC;
+- Media3;
+- Coil.
 
-1. Connect realtime events to dialogs and DM chat
-2. Add room chat history and send flow
-3. Add uploads and media rendering
-4. Add FCM support on backend and app
-5. Add local cache and offline restore
+Минимальная версия Android — 8.0 (`minSdk 26`). Для сборки используется Java 17.
+
+## Запуск проекта
+
+1. Клонируйте репозиторий.
+2. Откройте его в Android Studio.
+3. Дождитесь завершения Gradle Sync.
+4. Подключите устройство или запустите эмулятор.
+5. Запустите конфигурацию `app`.
+
+Backend по умолчанию задаётся через `BuildConfig.BASE_URL` в `app/build.gradle.kts`.
+
+Перед собственной сборкой замените адрес сервера:
+
+```kotlin
+buildConfigField("String", "BASE_URL", "\"https://example.com\"")
+```
+
+## Firebase
+
+Для push-уведомлений нужен собственный проект Firebase и файл:
+
+```text
+app/google-services.json
+```
+
+Файл содержит настройки конкретного Firebase-проекта и не должен публиковаться вместе с приватными ключами сервера.
+
+## Release-сборка
+
+Параметры подписи читаются из переменных окружения:
+
+```text
+ANDROID_KEYSTORE_PATH
+ANDROID_KEYSTORE_PASSWORD
+ANDROID_KEY_ALIAS
+ANDROID_KEY_PASSWORD
+```
+
+Пример:
+
+```bash
+./gradlew assembleRelease
+```
+
+Готовый APK создаётся с именем:
+
+```text
+zhuravlik-release.apk
+```
+
+## Связь с backend
+
+Приложение рассчитано на совместную работу с репозиторием [ZhurMessenger](https://github.com/WWWorm92/ZhurMessenger). Отдельно без совместимого API оно не запустится.
+
+При изменении серверных маршрутов, формата Socket.IO-событий или структуры авторизации клиент и backend нужно обновлять одновременно.
+
+## Состояние проекта
+
+Приложение находится в активной разработке и уже используется на реальном сервере. При этом часть архитектуры всё ещё меняется: постепенно улучшается офлайн-режим, обработка сетевых ошибок и стабильность звонков на разных устройствах.
+
+Перед публикацией собственной сборки в магазине приложений потребуется настроить подпись, Firebase, политику конфиденциальности и стабильный канал обновлений.
+
+## Лицензия
+
+Лицензия пока не добавлена. До её появления код доступен для просмотра, но не считается автоматически разрешённым для копирования и распространения.
