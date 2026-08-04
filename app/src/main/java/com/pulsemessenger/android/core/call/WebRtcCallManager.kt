@@ -2,6 +2,8 @@ package com.pulsemessenger.android.core.call
 
 import android.content.Context
 import android.media.AudioManager
+import android.os.Handler
+import android.os.Looper
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
 import org.webrtc.IceCandidate
@@ -38,6 +40,10 @@ class WebRtcCallManager(
     private val pendingRemoteIce = mutableListOf<CallIcePayload>()
     private var remoteDescriptionSet = false
     private var speakerEnabled = false
+    private val connectionHandler = Handler(Looper.getMainLooper())
+    @Volatile
+    private var lastIceConnectionState: PeerConnection.IceConnectionState? = null
+    private var disconnectWarningTask: Runnable? = null
 
     var onIceCandidate: ((CallIcePayload) -> Unit)? = null
     var onStatusChanged: ((String) -> Unit)? = null
@@ -255,7 +261,26 @@ class WebRtcCallManager(
 
     fun isSpeakerEnabled(): Boolean = speakerEnabled
 
+    private fun cancelDisconnectWarning() {
+        disconnectWarningTask?.let(connectionHandler::removeCallbacks)
+        disconnectWarningTask = null
+    }
+
+    private fun scheduleDisconnectWarning() {
+        cancelDisconnectWarning()
+        val task = Runnable {
+            disconnectWarningTask = null
+            if (lastIceConnectionState == PeerConnection.IceConnectionState.DISCONNECTED) {
+                onStatusChanged?.invoke("Соединение потеряно, восстанавливаем...")
+            }
+        }
+        disconnectWarningTask = task
+        connectionHandler.postDelayed(task, 2_500L)
+    }
+
     fun end() {
+        cancelDisconnectWarning()
+        lastIceConnectionState = null
         runCatching {
             peerConnection?.close()
             peerConnection?.dispose()
@@ -327,14 +352,33 @@ class WebRtcCallManager(
 
                 override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
                     android.util.Log.d("WEBRTC_CALL", "iceConnection=$state")
+                    lastIceConnectionState = state
 
                     when (state) {
-                        PeerConnection.IceConnectionState.CHECKING -> onStatusChanged?.invoke("Соединяем...")
+                        PeerConnection.IceConnectionState.CHECKING -> {
+                            if (disconnectWarningTask == null) {
+                                onStatusChanged?.invoke("Соединяем...")
+                            }
+                        }
                         PeerConnection.IceConnectionState.CONNECTED,
-                        PeerConnection.IceConnectionState.COMPLETED -> onStatusChanged?.invoke("Звонок активен")
-                        PeerConnection.IceConnectionState.DISCONNECTED -> onStatusChanged?.invoke("Соединение потеряно, восстанавливаем...")
-                        PeerConnection.IceConnectionState.FAILED -> onStatusChanged?.invoke("Не удалось соединиться. Можно подождать или завершить звонок")
-                        PeerConnection.IceConnectionState.CLOSED -> onStatusChanged?.invoke("Звонок завершён")
+                        PeerConnection.IceConnectionState.COMPLETED -> {
+                            cancelDisconnectWarning()
+                            onStatusChanged?.invoke("Звонок активен")
+                        }
+                        PeerConnection.IceConnectionState.DISCONNECTED -> {
+                            // DISCONNECTED is often transient while Android
+                            // switches network paths. Do not flash a reconnect
+                            // warning unless it persists for a few seconds.
+                            scheduleDisconnectWarning()
+                        }
+                        PeerConnection.IceConnectionState.FAILED -> {
+                            cancelDisconnectWarning()
+                            onStatusChanged?.invoke("Не удалось соединиться. Можно подождать или завершить звонок")
+                        }
+                        PeerConnection.IceConnectionState.CLOSED -> {
+                            cancelDisconnectWarning()
+                            onStatusChanged?.invoke("Звонок завершён")
+                        }
                         else -> Unit
                     }
                 }
@@ -421,6 +465,8 @@ class WebRtcCallManager(
     }
 
     private fun resetPeerConnectionOnly() {
+        cancelDisconnectWarning()
+        lastIceConnectionState = null
         runCatching {
             peerConnection?.close()
             peerConnection?.dispose()

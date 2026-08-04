@@ -34,30 +34,71 @@ class RealtimeSocketManager(
 
     private var onConnectionStateChanged: ((Boolean) -> Unit)? = null
     private var onConnectionError: ((String?) -> Unit)? = null
+    private var connectionReported = false
+    private var socketGeneration = 0L
+    private var connectedToken = ""
+    private var connectedDeviceKey = ""
+
+    private fun reportConnectionState(connected: Boolean) {
+        if (connectionReported == connected) return
+        connectionReported = connected
+        onConnectionStateChanged?.invoke(connected)
+    }
+
     fun connect(token: String, deviceKey: String) {
-        if (token.isBlank()) return
-        disconnect()
+        val safeToken = token.trim()
+        val safeDeviceKey = deviceKey.trim()
+        if (safeToken.isBlank()) return
+
+        val current = socket
+        if (
+            current?.connected() == true &&
+            connectedToken == safeToken &&
+            connectedDeviceKey == safeDeviceKey
+        ) {
+            reportConnectionState(true)
+            return
+        }
+
+        // Token refresh is a planned socket replacement. Detach listeners from
+        // the old socket before closing it so the UI is not told that the
+        // active WebRTC call lost its media connection.
+        val generation = ++socketGeneration
+        socket = null
+        current?.off()
+        current?.disconnect()
+        current?.close()
+
+        connectedToken = safeToken
+        connectedDeviceKey = safeDeviceKey
+
         try {
             val options = IO.Options.builder()
                 .setAuth(
                     mapOf(
-                        "token" to token,
-                        "deviceKey" to deviceKey,
+                        "token" to safeToken,
+                        "deviceKey" to safeDeviceKey,
                         "client" to "android"
                     )
                 )
                 .build()
-            socket = IO.socket(baseUrl, options).apply {
+            val createdSocket = IO.socket(baseUrl, options)
+            socket = createdSocket
+
+            createdSocket.apply {
                 on(Socket.EVENT_CONNECT) {
-                    onConnectionStateChanged?.invoke(true)
+                    if (generation != socketGeneration || socket !== createdSocket) return@on
+                    reportConnectionState(true)
                 }
 
                 on(Socket.EVENT_DISCONNECT) {
-                    onConnectionStateChanged?.invoke(false)
+                    if (generation != socketGeneration || socket !== createdSocket) return@on
+                    reportConnectionState(false)
                 }
 
                 on(Socket.EVENT_CONNECT_ERROR) {
-                    onConnectionStateChanged?.invoke(false)
+                    if (generation != socketGeneration || socket !== createdSocket) return@on
+                    reportConnectionState(false)
                     val message = it.firstOrNull()?.toString()
                     onConnectionError?.invoke(message)
                 }
@@ -193,10 +234,15 @@ class RealtimeSocketManager(
     }
 
     fun disconnect() {
-        onConnectionStateChanged?.invoke(false)
-        socket?.disconnect()
-        socket?.close()
+        ++socketGeneration
+        val current = socket
         socket = null
+        connectedToken = ""
+        connectedDeviceKey = ""
+        current?.off()
+        current?.disconnect()
+        current?.close()
+        reportConnectionState(false)
     }
 
     fun setOnRoomMessageNew(listener: ((Long, JSONObject) -> Unit)?) {

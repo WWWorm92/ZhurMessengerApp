@@ -629,25 +629,20 @@ fun PulseAndroidApp() {
     LaunchedEffect(realtimeConnected, activeCall?.callId) {
         val call = activeCall ?: return@LaunchedEffect
 
-        if (!realtimeConnected) {
-            updateActiveCallStatus(
-                if (call.connectedAtMillis == null) {
-                    "Нет соединения. Ожидаем сеть..."
-                } else {
-                    "Соединение потеряно. Восстанавливаем..."
-                }
-            )
+        // Socket.IO carries signalling, while an established conversation
+        // continues over WebRTC. A short signalling reconnect must not replace
+        // the status of an already working media connection.
+        if (!realtimeConnected && call.connectedAtMillis == null) {
+            updateActiveCallStatus("Нет соединения. Ожидаем сеть...")
             return@LaunchedEffect
         }
 
-        if (isConnectionProblemStatus(call.statusText)) {
-            updateActiveCallStatus(
-                if (call.connectedAtMillis == null) {
-                    "Ожидаем ответ..."
-                } else {
-                    "Восстанавливаем соединение..."
-                }
-            )
+        if (
+            realtimeConnected &&
+            call.connectedAtMillis == null &&
+            isConnectionProblemStatus(call.statusText)
+        ) {
+            updateActiveCallStatus("Ожидаем ответ...")
         }
     }
 
@@ -746,7 +741,6 @@ fun PulseAndroidApp() {
     LaunchedEffect(authViewModel.isAuthorized, authViewModel.currentUser?.id, sessionToken) {
         val token = sessionToken.trim()
         if (authViewModel.isAuthorized && token.isNotBlank()) {
-            realtimeConnected = false
             realtimeSocketManager.connect(token, sessionStore.ensureDeviceKey())
             invitationsViewModel.load()
             val app = PulseApp.instance
@@ -861,11 +855,6 @@ fun PulseAndroidApp() {
 
                         if (newToken.isNotBlank()) {
                             Log.d("AUTH", "Token refreshed, reconnecting socket")
-
-                            realtimeConnected = false
-                            realtimeSocketManager.disconnect()
-
-                            delay(500)
 
                             realtimeSocketManager.connect(
                                 newToken,
@@ -1115,12 +1104,15 @@ fun PulseAndroidApp() {
         realtimeSocketManager.setOnCallCancelled { payload ->
             scope.launch {
                 val callId = payload.optString("callId")
+                val reason = payload.optString("reason")
                 if (activeCall?.callId == callId || incomingCall?.callId == callId) {
                     CallNotificationHelper.cancelCallNotification(context.applicationContext, callId)
                     callTonePlayer.stopRingback()
                     callTonePlayer.stopConnectionLost()
                     callManager.end()
-                    callTonePlayer.playCallEnded()
+                    if (reason != "answered_elsewhere") {
+                        callTonePlayer.playCallEnded()
+                    }
                     activeCall = null
                     incomingCall = null
                     pendingSocketAcceptCall = null
