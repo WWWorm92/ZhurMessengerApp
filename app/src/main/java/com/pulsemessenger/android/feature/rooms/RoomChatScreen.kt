@@ -9,6 +9,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.size
@@ -73,6 +74,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -883,6 +888,102 @@ private fun buildRoomMeta(room: RoomDto): String {
     return if (room.membersCount > 0) "$slugPart • ${room.membersCount} участников" else slugPart
 }
 
+@Composable
+private fun LinkifiedMessageText(
+    text: String,
+    interactive: Boolean,
+    linksEnabled: Boolean,
+    onPlainClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    val uriHandler = LocalUriHandler.current
+    val linkColor = MaterialTheme.colorScheme.primary
+    var layoutResult by remember(text) { mutableStateOf<TextLayoutResult?>(null) }
+
+    val annotatedText = remember(text, linkColor) {
+        buildAnnotatedString {
+            append(text)
+
+            URL_REGEX.findAll(text).forEach { match ->
+                val raw = match.value
+                val trimmed = raw.trimEnd { it in URL_TRAILING_PUNCTUATION }
+                if (trimmed.isBlank()) return@forEach
+
+                val start = match.range.first
+                val end = start + trimmed.length
+                val target = if (
+                    trimmed.startsWith("http://", ignoreCase = true) ||
+                    trimmed.startsWith("https://", ignoreCase = true)
+                ) {
+                    trimmed
+                } else {
+                    "https://$trimmed"
+                }
+
+                addStyle(
+                    style = SpanStyle(
+                        color = linkColor,
+                        textDecoration = TextDecoration.Underline,
+                    ),
+                    start = start,
+                    end = end,
+                )
+                addStringAnnotation(
+                    tag = URL_ANNOTATION_TAG,
+                    annotation = target,
+                    start = start,
+                    end = end,
+                )
+            }
+        }
+    }
+
+    Text(
+        text = annotatedText,
+        onTextLayout = { layoutResult = it },
+        modifier = if (interactive) {
+            Modifier.pointerInput(text, linksEnabled) {
+                detectTapGestures(
+                    onTap = { position ->
+                        val offset = layoutResult?.getOffsetForPosition(position)
+                        val url = offset?.let {
+                            annotatedText
+                                .getStringAnnotations(
+                                    tag = URL_ANNOTATION_TAG,
+                                    start = it,
+                                    end = it,
+                                )
+                                .firstOrNull()
+                                ?.item
+                        }
+
+                        if (linksEnabled && !url.isNullOrBlank()) {
+                            runCatching { uriHandler.openUri(url) }
+                        } else {
+                            onPlainClick()
+                        }
+                    },
+                    onLongPress = {
+                        onLongClick()
+                    },
+                )
+            }
+        } else {
+            Modifier
+        },
+    )
+}
+
+private const val URL_ANNOTATION_TAG = "URL"
+
+private val URL_REGEX = Regex(
+    pattern = """(?i)(?<![@\p{L}\p{N}_])(?:(?:https?://|www\.)[^\s<]+|(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?\.)+(?:[\p{L}]{2,63}|xn--[a-z0-9-]{2,59})(?::\d{1,5})?(?:/[^\s<]*)?(?:\?[^\s<]*)?(?:#[^\s<]*)?)""",
+)
+
+private val URL_TRAILING_PUNCTUATION = setOf(
+    '.', ',', '!', '?', ';', ':', ')', ']', '}',
+)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RoomMessageBubble(
@@ -1024,7 +1125,23 @@ private fun RoomMessageBubble(
                             else -> "[${message.type}]"
                         }
                         if (mainText.isNotBlank()) {
-                            Text(mainText)
+                            LinkifiedMessageText(
+                                text = mainText,
+                                interactive = message.deletedAt == null,
+                                linksEnabled = !selectionMode,
+                                onPlainClick = {
+                                    if (selectionMode) {
+                                        onToggleSelect()
+                                    } else {
+                                        menuExpanded = true
+                                    }
+                                },
+                                onLongClick = {
+                                    if (!selectionMode) {
+                                        onSelect()
+                                    }
+                                },
+                            )
                         }
                         if (albumMessages.size > 1 && message.deletedAt == null) {
                             Spacer(modifier = Modifier.height(8.dp))
