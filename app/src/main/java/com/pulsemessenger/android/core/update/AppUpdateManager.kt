@@ -9,6 +9,8 @@ import com.google.gson.Gson
 import com.pulsemessenger.android.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -29,6 +31,18 @@ data class AppUpdateInfo(
     val apkUrl: String,
     val fileName: String,
 )
+
+object AppUpdatePromptBus {
+    private val _requests = MutableSharedFlow<Unit>(
+        replay = 1,
+        extraBufferCapacity = 1,
+    )
+    val requests = _requests.asSharedFlow()
+
+    fun request() {
+        _requests.tryEmit(Unit)
+    }
+}
 
 class AppUpdateManager(
     private val context: Context,
@@ -71,7 +85,7 @@ class AppUpdateManager(
             val remoteVersion = normalizeVersion(payload.version)
             val localVersion = normalizeVersion(currentVersion)
 
-            if (remoteVersion.isBlank() || remoteVersion == localVersion) {
+            if (remoteVersion.isBlank() || !isNewerVersion(remoteVersion, localVersion)) {
                 return@withContext null
             }
 
@@ -202,5 +216,23 @@ class AppUpdateManager(
 
     private fun normalizeVersion(value: String): String {
         return value.trim().removePrefix("v").removePrefix("V")
+    }
+
+    private fun isNewerVersion(remote: String, local: String): Boolean {
+        val remoteParts = Regex("\\d+").findAll(remote).map { it.value.toIntOrNull() ?: 0 }.toList()
+        val localParts = Regex("\\d+").findAll(local).map { it.value.toIntOrNull() ?: 0 }.toList()
+
+        if (remoteParts.isEmpty() || localParts.isEmpty()) {
+            return remote != local
+        }
+
+        val size = maxOf(remoteParts.size, localParts.size)
+        for (index in 0 until size) {
+            val remotePart = remoteParts.getOrElse(index) { 0 }
+            val localPart = localParts.getOrElse(index) { 0 }
+            if (remotePart != localPart) return remotePart > localPart
+        }
+
+        return false
     }
 }

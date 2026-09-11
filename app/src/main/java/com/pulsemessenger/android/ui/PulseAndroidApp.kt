@@ -28,10 +28,14 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.background
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,6 +44,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import com.pulsemessenger.android.core.session.LocalSettings
 import com.pulsemessenger.android.core.session.ThemeMode
 import com.pulsemessenger.android.ui.theme.PulseAndroidTheme
@@ -108,6 +113,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.pulsemessenger.android.core.network.RoomDto
 import com.pulsemessenger.android.core.update.AppUpdateInfo
 import com.pulsemessenger.android.core.update.AppUpdateManager
+import com.pulsemessenger.android.core.update.AppUpdatePromptBus
 import com.pulsemessenger.android.ui.HomeTab
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -117,11 +123,17 @@ import java.util.UUID
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Button
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Text
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 
 private fun jwtExpiryMillis(token: String): Long? {
     return try {
@@ -254,6 +266,9 @@ fun PulseAndroidApp() {
     var downloadedUpdatePath by remember { mutableStateOf<String?>(null) }
     var isDownloadingUpdate by remember { mutableStateOf(false) }
     var updateError by remember { mutableStateOf<String?>(null) }
+    var dismissedUpdateVersion by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingUpdateInstallPermission by remember { mutableStateOf(false) }
+    var updateCheckNonce by remember { mutableStateOf(0L) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -418,6 +433,27 @@ fun PulseAndroidApp() {
         callWindowOpen = false
     }
 
+    fun launchUpdateInstaller(apkPath: String) {
+        if (apkPath.isBlank()) return
+
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !context.packageManager.canRequestPackageInstalls()
+        ) {
+            pendingUpdateInstallPermission = true
+            context.startActivity(
+                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                    data = android.net.Uri.parse("package:${context.packageName}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+            return
+        }
+
+        pendingUpdateInstallPermission = false
+        context.startActivity(updateManager.createInstallIntent(File(apkPath)))
+    }
+
     fun downloadUpdate(update: AppUpdateInfo) {
         if (isDownloadingUpdate) return
 
@@ -428,7 +464,9 @@ fun PulseAndroidApp() {
 
             val file = runCatching {
                 updateManager.downloadApk(update) { progress ->
-                    updateDownloadProgress = progress
+                    scope.launch {
+                        updateDownloadProgress = progress
+                    }
                 }
             }.onFailure { error ->
                 Log.e("APP_UPDATE", "download failed", error)
@@ -438,7 +476,11 @@ fun PulseAndroidApp() {
             isDownloadingUpdate = false
 
             if (file == null) {
-                updateError = "Не удалось скачать APK. Нажмите, чтобы повторить."
+                updateError = "Не удалось скачать APK. Попробуйте ещё раз."
+            } else {
+                updateDownloadProgress = 1f
+                delay(150L)
+                launchUpdateInstaller(file.absolutePath)
             }
 
             Log.d("APP_UPDATE", "downloadedPath=$downloadedUpdatePath")
@@ -834,6 +876,14 @@ fun PulseAndroidApp() {
     }
 
     LaunchedEffect(Unit) {
+        AppUpdatePromptBus.requests.collect {
+            updateCheckNonce += 1L
+        }
+    }
+
+    LaunchedEffect(appInForeground, updateCheckNonce) {
+        if (!appInForeground) return@LaunchedEffect
+
         while (true) {
             Log.d("APP_UPDATE", "checking local=${BuildConfig.VERSION_NAME}")
 
@@ -866,6 +916,19 @@ fun PulseAndroidApp() {
             }
 
             delay(6 * 60 * 60 * 1000L)
+        }
+    }
+
+    LaunchedEffect(appInForeground, pendingUpdateInstallPermission, downloadedUpdatePath) {
+        val apkPath = downloadedUpdatePath
+        if (
+            appInForeground &&
+            pendingUpdateInstallPermission &&
+            !apkPath.isNullOrBlank() &&
+            (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || context.packageManager.canRequestPackageInstalls())
+        ) {
+            delay(250L)
+            launchUpdateInstaller(apkPath)
         }
     }
 
@@ -1649,36 +1712,6 @@ fun PulseAndroidApp() {
                 if (authViewModel.isAuthorized && !realtimeConnected) {
                     ConnectionBanner()
                 }
-                val update = availableUpdate
-                if (update != null) {
-                    UpdateBanner(
-                        version = update.version,
-                        isDownloading = isDownloadingUpdate,
-                        progress = updateDownloadProgress,
-                        downloaded = downloadedUpdatePath != null,
-                        error = updateError,
-                        onAction = {
-                            val apkPath = downloadedUpdatePath
-
-                            if (apkPath == null) {
-                                downloadUpdate(update)
-                                return@UpdateBanner
-                            }
-
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
-                                context.startActivity(
-                                    Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
-                                        data = android.net.Uri.parse("package:${context.packageName}")
-                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    }
-                                )
-                            } else {
-                                context.startActivity(updateManager.createInstallIntent(File(apkPath)))
-                            }
-                        }
-                    )
-                }
-
                 incomingCall?.let { call ->
                     IncomingCallOverlay(
                         callerName = call.peerName,
@@ -1724,6 +1757,36 @@ fun PulseAndroidApp() {
                             onOpen = { callWindowOpen = true },
                         )
                     }
+                }
+
+                val update = availableUpdate
+                if (
+                    update != null &&
+                    dismissedUpdateVersion != update.version &&
+                    incomingCall == null &&
+                    activeCall == null
+                ) {
+                    UpdateDialog(
+                        currentVersion = BuildConfig.VERSION_NAME,
+                        update = update,
+                        isDownloading = isDownloadingUpdate,
+                        progress = updateDownloadProgress,
+                        downloaded = downloadedUpdatePath != null,
+                        error = updateError,
+                        onLater = {
+                            if (!isDownloadingUpdate) {
+                                dismissedUpdateVersion = update.version
+                            }
+                        },
+                        onUpdate = {
+                            val apkPath = downloadedUpdatePath
+                            if (apkPath.isNullOrBlank()) {
+                                downloadUpdate(update)
+                            } else {
+                                launchUpdateInstaller(apkPath)
+                            }
+                        },
+                    )
                 }
             }
         }
@@ -1823,65 +1886,175 @@ private fun ConnectionBanner() {
 }
 
 @Composable
-private fun UpdateBanner(
-    version: String,
+private fun UpdateDialog(
+    currentVersion: String,
+    update: AppUpdateInfo,
     isDownloading: Boolean,
     progress: Float?,
     downloaded: Boolean,
     error: String?,
-    onAction: () -> Unit,
+    onLater: () -> Unit,
+    onUpdate: () -> Unit,
 ) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 64.dp, start = 16.dp, end = 16.dp),
-        contentAlignment = Alignment.TopCenter,
+    val progressValue = progress?.coerceIn(0f, 1f)
+    val notes = update.notes.trim().take(1400)
+
+    Dialog(
+        onDismissRequest = {
+            if (!isDownloading) onLater()
+        },
+        properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Card(
-            shape = RoundedCornerShape(22.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 22.dp)
+                .widthIn(max = 460.dp),
+            shape = RoundedCornerShape(30.dp),
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
-            )
+                containerColor = MaterialTheme.colorScheme.surface,
+            ),
         ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            Column(
+                modifier = Modifier.padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center,
+                ) {
                     Text(
-                        text = "Доступна версия $version",
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
-                    )
-
-                    Text(
-                        text = when {
-                            isDownloading -> "Загрузка ${progress?.let { "${(it * 100).toInt()}%" } ?: "..."}"
-                            downloaded -> "APK скачан, можно установить"
-                            !error.isNullOrBlank() -> error
-                            else -> "Нажмите, чтобы скачать обновление"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (!error.isNullOrBlank()) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
+                        text = "↑",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        fontWeight = FontWeight.Bold,
                     )
                 }
 
-                if (isDownloading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "Доступна новая версия",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
                     )
-                } else {
-                    FilledIconButton(onClick = onAction) {
+                    Text(
+                        text = "Zhuravlik ${update.version} готов к установке",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(50.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                    ) {
                         Text(
-                            text = when {
-                                downloaded -> "OK"
-                                !error.isNullOrBlank() -> "↻"
-                                else -> "↓"
+                            text = currentVersion,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                    }
+                    Text(
+                        text = "→",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(50.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                    ) {
+                        Text(
+                            text = update.version,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+
+                if (notes.isNotBlank()) {
+                    Card(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                        ),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                text = "Что нового",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                text = notes,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 8,
+                            )
+                        }
+                    }
+                }
+
+                if (isDownloading) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (progressValue != null) {
+                            LinearProgressIndicator(
+                                progress = { progressValue },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        } else {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                        Text(
+                            text = progressValue?.let { "Скачиваем обновление · ${(it * 100).toInt()}%" }
+                                ?: "Скачиваем обновление…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                if (!error.isNullOrBlank()) {
+                    Text(
+                        text = error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(
+                        onClick = onLater,
+                        enabled = !isDownloading,
+                    ) {
+                        Text("Позже")
+                    }
+                    Spacer(modifier = Modifier.size(8.dp))
+                    Button(
+                        onClick = onUpdate,
+                        enabled = !isDownloading,
+                    ) {
+                        Text(
+                            when {
+                                isDownloading -> "Скачиваем…"
+                                downloaded -> "Установить"
+                                !error.isNullOrBlank() -> "Повторить"
+                                else -> "Обновить"
                             }
                         )
                     }
@@ -1890,3 +2063,4 @@ private fun UpdateBanner(
         }
     }
 }
+

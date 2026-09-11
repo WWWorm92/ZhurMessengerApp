@@ -18,6 +18,7 @@ import androidx.core.graphics.drawable.IconCompat
 import androidx.core.content.ContextCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import com.pulsemessenger.android.BuildConfig
 import com.pulsemessenger.android.MainActivity
 import com.pulsemessenger.android.PulseApp
 import com.pulsemessenger.android.R
@@ -50,6 +51,11 @@ class FCMService : FirebaseMessagingService() {
                 return
             }
 
+            "app_update" -> {
+                showAppUpdateNotification(data)
+                return
+            }
+
             "message" -> {
                 showGroupedMessageNotification(data)
                 return
@@ -63,6 +69,89 @@ class FCMService : FirebaseMessagingService() {
         val url = data["url"] ?: "/"
 
         showFallbackNotification(title, body, url)
+    }
+
+    private fun showAppUpdateNotification(data: Map<String, String>) {
+        val version = data["version"].orEmpty().trim().removePrefix("v").removePrefix("V")
+        if (version.isBlank() || !isNewerVersion(version, BuildConfig.VERSION_NAME)) {
+            Log.d(
+                "APP_UPDATE",
+                "Ignoring update push remote=$version local=${BuildConfig.VERSION_NAME}",
+            )
+            return
+        }
+
+        createUpdateChannelIfNeeded()
+
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.w("APP_UPDATE", "POST_NOTIFICATIONS permission is not granted")
+            return
+        }
+
+        val title = data["title"].orEmpty().ifBlank { "Доступна новая версия Zhuravlik" }
+        val body = data["body"].orEmpty().ifBlank { "Версия $version готова к установке" }
+
+        val openIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("url", "/")
+            putExtra(MainActivity.EXTRA_OPEN_APP_UPDATE, true)
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            UPDATE_NOTIFICATION_ID,
+            openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val largeIcon = BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher)
+
+        val notification = NotificationCompat.Builder(this, UPDATE_CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher_round)
+            .setLargeIcon(largeIcon)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setSubText("Zhuravlik")
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setColor(0xFF55B6FF.toInt())
+            .setOnlyAlertOnce(true)
+            .build()
+
+        NotificationManagerCompat.from(this)
+            .notify(UPDATE_NOTIFICATION_ID, notification)
+    }
+
+    private fun isNewerVersion(remote: String, local: String): Boolean {
+        val normalizedRemote = remote.trim().removePrefix("v").removePrefix("V")
+        val normalizedLocal = local.trim().removePrefix("v").removePrefix("V")
+        if (normalizedRemote == normalizedLocal) return false
+
+        val remoteParts = Regex("\\d+").findAll(normalizedRemote).map { it.value.toIntOrNull() ?: 0 }.toList()
+        val localParts = Regex("\\d+").findAll(normalizedLocal).map { it.value.toIntOrNull() ?: 0 }.toList()
+
+        if (remoteParts.isEmpty() || localParts.isEmpty()) {
+            return normalizedRemote != normalizedLocal
+        }
+
+        val size = maxOf(remoteParts.size, localParts.size)
+        for (index in 0 until size) {
+            val remotePart = remoteParts.getOrElse(index) { 0 }
+            val localPart = localParts.getOrElse(index) { 0 }
+            if (remotePart != localPart) return remotePart > localPart
+        }
+
+        return false
     }
 
     private fun resolveIncomingCall(data: Map<String, String>) {
@@ -385,6 +474,21 @@ class FCMService : FirebaseMessagingService() {
             .notify(notificationId, builder.build())
     }
 
+    private fun createUpdateChannelIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+
+        val manager = getSystemService(NotificationManager::class.java)
+        val channel = NotificationChannel(
+            UPDATE_CHANNEL_ID,
+            "Обновления",
+            NotificationManager.IMPORTANCE_HIGH,
+        ).apply {
+            description = "Уведомления о новых версиях Zhuravlik"
+        }
+
+        manager.createNotificationChannel(channel)
+    }
+
     private fun createChannelIfNeeded() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
 
@@ -401,4 +505,10 @@ class FCMService : FirebaseMessagingService() {
 
         manager.createNotificationChannel(channel)
     }
+
+    companion object {
+        private const val UPDATE_CHANNEL_ID = "pulse_app_updates"
+        private const val UPDATE_NOTIFICATION_ID = 7_071_001
+    }
+
 }
