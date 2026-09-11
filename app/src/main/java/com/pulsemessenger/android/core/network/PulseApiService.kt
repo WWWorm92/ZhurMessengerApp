@@ -392,6 +392,11 @@ interface PulseApiService {
         @Header("Authorization") authorization: String,
     ): Response<GenericOkResponse>
 
+    @GET("/api/calls/ice-config")
+    suspend fun callIceConfig(
+        @Header("Authorization") authorization: String,
+    ): Response<CallIceConfigResponse>
+
     @GET("/api/notifications/status")
     suspend fun notificationStatus(
         @Header("Authorization") authorization: String,

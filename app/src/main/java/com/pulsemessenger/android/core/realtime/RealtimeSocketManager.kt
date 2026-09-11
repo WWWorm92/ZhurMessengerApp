@@ -413,6 +413,7 @@ class RealtimeSocketManager(
         targetUserId: Long,
         sdp: String,
         iceRestart: Boolean = false,
+        negotiationId: String = "",
     ) {
         if (callId.isBlank() || targetUserId <= 0L || sdp.isBlank()) return
         socket?.emit(
@@ -422,11 +423,17 @@ class RealtimeSocketManager(
                 .put("targetUserId", targetUserId)
                 .put("sdp", sdp)
                 .put("iceRestart", iceRestart)
+                .put("negotiationId", negotiationId)
         )
     }
 
-    fun emitCallAnswer(callId: String, targetUserId: Long, sdp: String) {
-        emitCallSdp("call:answer", callId, targetUserId, sdp)
+    fun emitCallAnswer(
+        callId: String,
+        targetUserId: Long,
+        sdp: String,
+        negotiationId: String = "",
+    ) {
+        emitCallSdp("call:answer", callId, targetUserId, sdp, negotiationId)
     }
 
     fun emitCallIce(
@@ -435,6 +442,7 @@ class RealtimeSocketManager(
         sdpMid: String?,
         sdpMLineIndex: Int,
         candidate: String,
+        negotiationId: String = "",
     ) {
         if (callId.isBlank() || targetUserId <= 0L || candidate.isBlank()) {
             android.util.Log.w(
@@ -457,6 +465,7 @@ class RealtimeSocketManager(
                 .put("sdpMid", sdpMid ?: JSONObject.NULL)
                 .put("sdpMLineIndex", sdpMLineIndex)
                 .put("candidate", candidate)
+                .put("negotiationId", negotiationId)
         )
     }
 
@@ -470,7 +479,13 @@ class RealtimeSocketManager(
         )
     }
 
-    private fun emitCallSdp(event: String, callId: String, targetUserId: Long, sdp: String) {
+    private fun emitCallSdp(
+        event: String,
+        callId: String,
+        targetUserId: Long,
+        sdp: String,
+        negotiationId: String = "",
+    ) {
         if (callId.isBlank() || targetUserId <= 0L || sdp.isBlank()) return
         socket?.emit(
             event,
@@ -478,6 +493,7 @@ class RealtimeSocketManager(
                 .put("callId", callId)
                 .put("targetUserId", targetUserId)
                 .put("sdp", sdp)
+                .put("negotiationId", negotiationId)
         )
     }
 

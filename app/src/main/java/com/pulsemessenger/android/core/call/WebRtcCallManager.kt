@@ -26,7 +26,7 @@ class WebRtcCallManager(
 ) {
     companion object {
         private const val TAG = "WEBRTC_CALL"
-        private const val VERSION = "webrtc-v5-recovery-2026-09-11"
+        private const val VERSION = "webrtc-v6-ice-generation-2026-09-11"
     }
 
     private val initialized = AtomicBoolean(false)
@@ -49,6 +49,10 @@ class WebRtcCallManager(
     private var lastRemoteOfferSdp = ""
     private var lastLocalAnswerSdp = ""
     private var lastRemoteAnswerSdp = ""
+    private var remoteAnswerInFlight = false
+    private var configuredIceServers: List<PeerConnection.IceServer> = listOf(
+        PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
+    )
 
     var onIceCandidate: ((CallIcePayload) -> Unit)? = null
     var onStatusChanged: ((String) -> Unit)? = null
@@ -317,40 +321,68 @@ class WebRtcCallManager(
         val safeAnswer = normalizeRemoteSdp(remoteAnswer)
 
         android.util.Log.d(
-            "WEBRTC_CALL",
-            "remote answer length=${safeAnswer.length} hasAudio=${safeAnswer.contains("m=audio")} hasExtmapMixed=${safeAnswer.contains("a=extmap-allow-mixed")} start=${safeAnswer.take(160)}"
+            TAG,
+            "remote answer length=${safeAnswer.length} hasAudio=${safeAnswer.contains("m=audio")} signaling=${peerConnection?.signalingState()}"
         )
 
         if (!safeAnswer.trimStart().startsWith("v=0")) {
-            android.util.Log.e("WEBRTC_CALL", "invalid remote answer: ${safeAnswer.take(240)}")
-            onStatusChanged?.invoke("Ошибка remote answer: invalid SDP")
+            android.util.Log.e(TAG, "invalid remote answer")
             return
         }
 
         val pc = peerConnection ?: return
+        val signalingState = pc.signalingState()
 
-        if (
-            safeAnswer == lastRemoteAnswerSdp &&
-            pc.signalingState() == PeerConnection.SignalingState.STABLE
-        ) {
-            android.util.Log.d(TAG, "duplicate remote answer ignored")
-            onStatusChanged?.invoke("Звонок активен")
+        // ANSWER is legal only for our outstanding local OFFER. Replayed or
+        // delayed answers after an already completed negotiation are harmless.
+        if (signalingState == PeerConnection.SignalingState.STABLE) {
+            android.util.Log.d(TAG, "stale/duplicate remote answer ignored; signaling=STABLE")
+            restartOfferInFlight = false
             return
         }
 
+        if (signalingState != PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
+            android.util.Log.w(TAG, "remote answer ignored in signaling=$signalingState")
+            return
+        }
+
+        // setRemoteDescription is async. Without this guard two answers can
+        // both observe HAVE_LOCAL_OFFER before the first one moves us to STABLE.
+        if (remoteAnswerInFlight) {
+            android.util.Log.d(TAG, "remote answer ignored: another answer is already in flight")
+            return
+        }
+
+        remoteAnswerInFlight = true
         val remoteDescription = SessionDescription(SessionDescription.Type.ANSWER, safeAnswer)
         pc.setRemoteDescription(object : SimpleSdpObserver() {
             override fun onSetSuccess() {
+                remoteAnswerInFlight = false
                 remoteDescriptionSet = true
                 lastRemoteAnswerSdp = safeAnswer
                 restartOfferInFlight = false
                 flushPendingRemoteIce()
-                onStatusChanged?.invoke("Звонок активен")
+                // The ICE callback is the source of truth for media health.
+                if (isMediaConnected()) {
+                    onStatusChanged?.invoke("Звонок активен")
+                } else {
+                    onStatusChanged?.invoke("Соединяем...")
+                }
             }
 
             override fun onSetFailure(error: String?) {
+                remoteAnswerInFlight = false
+
+                // Another valid answer may have completed while this async
+                // operation was queued. Never turn that into a user-visible SDP error.
+                if (pc.signalingState() == PeerConnection.SignalingState.STABLE) {
+                    android.util.Log.d(TAG, "remote answer became stale while applying; ignored")
+                    return
+                }
+
                 android.util.Log.e(TAG, "setRemoteDescription answer failed: $error")
-                onStatusChanged?.invoke("Ошибка remote answer: ${error ?: "unknown"}")
+                onStatusChanged?.invoke("Восстанавливаем соединение...")
+                requestRecovery()
             }
         }, remoteDescription)
     }
@@ -433,11 +465,24 @@ class WebRtcCallManager(
         pendingRemoteIce.clear()
         remoteDescriptionSet = false
         restartOfferInFlight = false
+        remoteAnswerInFlight = false
         lastRecoveryRequestAt = 0L
         lastRemoteOfferSdp = ""
         lastLocalAnswerSdp = ""
         lastRemoteAnswerSdp = ""
         onStatusChanged?.invoke("Звонок завершён")
+    }
+
+    fun updateIceServers(servers: List<PeerConnection.IceServer>) {
+        if (servers.isEmpty()) return
+        configuredIceServers = servers
+
+        val pc = peerConnection ?: return
+        val config = PeerConnection.RTCConfiguration(configuredIceServers).apply {
+            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+        }
+        val updated = runCatching { pc.setConfiguration(config) }.getOrDefault(false)
+        android.util.Log.d(TAG, "ICE configuration refreshed servers=${servers.size} applied=$updated")
     }
 
     private fun preparePeerConnection(addLocalAudio: Boolean) {
@@ -447,22 +492,7 @@ class WebRtcCallManager(
         audioManager?.mode = AudioManager.MODE_IN_COMMUNICATION
         audioManager?.isSpeakerphoneOn = speakerEnabled
 
-        val iceServers = listOf(
-            PeerConnection.IceServer.builder("stun:stun.l.google.com:19302")
-                .createIceServer(),
-
-            PeerConnection.IceServer.builder("turn:turn.zhuravlynoe.ru:3478?transport=udp")
-                .setUsername("pulse")
-                .setPassword("Reich1934")
-                .createIceServer(),
-
-            PeerConnection.IceServer.builder("turn:turn.zhuravlynoe.ru:3478?transport=tcp")
-                .setUsername("pulse")
-                .setPassword("Reich1934")
-                .createIceServer(),
-        )
-
-        val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
+        val rtcConfig = PeerConnection.RTCConfiguration(configuredIceServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
         }
 
@@ -614,6 +644,7 @@ class WebRtcCallManager(
         remoteDescriptionSet = false
         pendingRemoteIce.clear()
         restartOfferInFlight = false
+        remoteAnswerInFlight = false
         lastRecoveryRequestAt = 0L
         lastRemoteOfferSdp = ""
         lastLocalAnswerSdp = ""

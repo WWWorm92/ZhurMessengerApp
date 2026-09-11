@@ -530,6 +530,20 @@ data class NotificationStatusResponse(
     val subscriptions: Int = 0,
 )
 
+// WebRTC ICE/TURN configuration returned by /api/calls/ice-config.
+// `urls` can be either a single string or a JSON array, so Any? is intentional.
+data class CallIceServerDto(
+    val urls: Any? = null,
+    val username: String = "",
+    val credential: String = "",
+    val credentialType: String = "",
+)
+
+data class CallIceConfigResponse(
+    val iceServers: List<CallIceServerDto> = emptyList(),
+    val credentialTtlSeconds: Long? = null,
+)
+
 data class GenericOkResponse(
     val ok: Boolean = false,
 )

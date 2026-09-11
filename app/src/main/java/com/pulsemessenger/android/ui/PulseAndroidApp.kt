@@ -97,6 +97,7 @@ import com.pulsemessenger.android.feature.createroom.CreateRoomViewModel
 import com.pulsemessenger.android.feature.createroom.CreateRoomViewModelFactory
 import com.pulsemessenger.android.core.realtime.RealtimeSocketManager
 import com.pulsemessenger.android.core.call.CallIcePayload
+import com.pulsemessenger.android.core.call.CallIceConfigRepository
 import com.pulsemessenger.android.core.call.WebRtcCallManager
 import com.pulsemessenger.android.core.call.CallActionBus
 import com.pulsemessenger.android.core.call.CallForegroundService
@@ -283,6 +284,7 @@ fun PulseAndroidApp() {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    val callIceConfigRepository = remember { CallIceConfigRepository(networkProvider, sessionStore) }
     val callManager = remember { WebRtcCallManager(context.applicationContext) }
     val callTonePlayer = remember { CallTonePlayer(context.applicationContext) }
     var incomingCall by remember { mutableStateOf<CallUiState?>(null) }
@@ -295,6 +297,7 @@ fun PulseAndroidApp() {
     var callSpeakerEnabled by remember { mutableStateOf(false) }
     var callWindowOpen by remember { mutableStateOf(false) }
     var callElapsedSeconds by remember { mutableStateOf(0) }
+    var callNegotiationId by remember { mutableStateOf("") }
 
     fun hasMicPermission(): Boolean {
         return ContextCompat.checkSelfPermission(
@@ -333,6 +336,7 @@ fun PulseAndroidApp() {
         callMuted = false
         callSpeakerEnabled = false
         callWindowOpen = false
+        callNegotiationId = ""
         call?.let {
             CallNotificationHelper.cancelCallNotification(context.applicationContext, it.callId)
         }
@@ -386,13 +390,22 @@ fun PulseAndroidApp() {
             return
         }
 
-        callManager.restartAsCaller { offer ->
-            realtimeSocketManager.emitCallOffer(
-                callId = call.callId,
-                targetUserId = call.peerUserId,
-                sdp = offer,
-                iceRestart = true,
-            )
+        scope.launch {
+            val iceServers = callIceConfigRepository.load(force = true)
+            callManager.updateIceServers(iceServers)
+
+            val negotiationId = UUID.randomUUID().toString()
+            callNegotiationId = negotiationId
+
+            callManager.restartAsCaller { offer ->
+                realtimeSocketManager.emitCallOffer(
+                    callId = call.callId,
+                    targetUserId = call.peerUserId,
+                    sdp = offer,
+                    iceRestart = true,
+                    negotiationId = negotiationId,
+                )
+            }
         }
     }
 
@@ -1120,6 +1133,10 @@ fun PulseAndroidApp() {
                 // На реальном звонке между accept и CONNECTED может быть несколько секунд
                 // состояния "Соединяем..."; гудки должны продолжаться до "Звонок активен".
 
+                val negotiationId = UUID.randomUUID().toString()
+                callNegotiationId = negotiationId
+                callManager.updateIceServers(callIceConfigRepository.load(force = false))
+
                 callManager.onIceCandidate = { ice ->
                     realtimeSocketManager.emitCallIce(
                         callId = call.callId,
@@ -1127,13 +1144,19 @@ fun PulseAndroidApp() {
                         sdpMid = ice.sdpMid,
                         sdpMLineIndex = ice.sdpMLineIndex,
                         candidate = ice.candidate,
+                        negotiationId = callNegotiationId,
                     )
                 }
                 callManager.onStatusChanged = { status ->
                     updateActiveCallStatus(status)
                 }
                 callManager.startAsCaller { offer ->
-                    realtimeSocketManager.emitCallOffer(call.callId, call.peerUserId, offer)
+                    realtimeSocketManager.emitCallOffer(
+                        callId = call.callId,
+                        targetUserId = call.peerUserId,
+                        sdp = offer,
+                        negotiationId = negotiationId,
+                    )
                 }
                 activeCall = call.copy(statusText = "Соединяем...", connectedAtMillis = null)
                 callWindowOpen = true
@@ -1148,6 +1171,15 @@ fun PulseAndroidApp() {
                 val offer = payload.optString("sdp")
                 if (offer.isBlank()) return@launch
 
+                val incomingNegotiationId = payload.optString("negotiationId")
+                if (incomingNegotiationId.isNotBlank()) {
+                    callNegotiationId = incomingNegotiationId
+                }
+
+                callManager.updateIceServers(
+                    callIceConfigRepository.load(force = payload.optBoolean("iceRestart", false))
+                )
+
                 callManager.onIceCandidate = { ice ->
                     realtimeSocketManager.emitCallIce(
                         callId = call.callId,
@@ -1155,6 +1187,7 @@ fun PulseAndroidApp() {
                         sdpMid = ice.sdpMid,
                         sdpMLineIndex = ice.sdpMLineIndex,
                         candidate = ice.candidate,
+                        negotiationId = callNegotiationId,
                     )
                 }
                 callManager.onStatusChanged = { status ->
@@ -1162,7 +1195,12 @@ fun PulseAndroidApp() {
                 }
 
                 val sendAnswer: (String) -> Unit = { answer ->
-                    realtimeSocketManager.emitCallAnswer(call.callId, call.peerUserId, answer)
+                    realtimeSocketManager.emitCallAnswer(
+                        callId = call.callId,
+                        targetUserId = call.peerUserId,
+                        sdp = answer,
+                        negotiationId = callNegotiationId,
+                    )
                 }
 
                 if (callManager.hasPeerConnection()) {
@@ -1181,6 +1219,19 @@ fun PulseAndroidApp() {
                 if (payload.optString("callId") != call.callId) return@launch
 
                 val answer = payload.optString("sdp")
+                val incomingNegotiationId = payload.optString("negotiationId")
+                if (
+                    incomingNegotiationId.isNotBlank() &&
+                    callNegotiationId.isNotBlank() &&
+                    incomingNegotiationId != callNegotiationId
+                ) {
+                    Log.d(
+                        "WEBRTC_CALL",
+                        "stale answer ignored expected=$callNegotiationId received=$incomingNegotiationId"
+                    )
+                    return@launch
+                }
+
                 if (answer.isNotBlank()) {
                     callManager.handleRemoteAnswer(answer)
                 }
@@ -1191,6 +1242,19 @@ fun PulseAndroidApp() {
             scope.launch {
                 val call = activeCall ?: return@launch
                 if (payload.optString("callId") != call.callId) return@launch
+
+                val incomingNegotiationId = payload.optString("negotiationId")
+                if (
+                    incomingNegotiationId.isNotBlank() &&
+                    callNegotiationId.isNotBlank() &&
+                    incomingNegotiationId != callNegotiationId
+                ) {
+                    Log.d(
+                        "WEBRTC_CALL",
+                        "stale ICE ignored expected=$callNegotiationId received=$incomingNegotiationId"
+                    )
+                    return@launch
+                }
 
                 callManager.addRemoteIce(
                     CallIcePayload(
@@ -1239,6 +1303,7 @@ fun PulseAndroidApp() {
                     callMuted = false
                     callSpeakerEnabled = false
                     callWindowOpen = false
+                    callNegotiationId = ""
                 }
             }
         }
@@ -1262,6 +1327,7 @@ fun PulseAndroidApp() {
                     callMuted = false
                     callSpeakerEnabled = false
                     callWindowOpen = false
+                    callNegotiationId = ""
                 }
             }
         }
@@ -1282,6 +1348,7 @@ fun PulseAndroidApp() {
                     callMuted = false
                     callSpeakerEnabled = false
                     callWindowOpen = false
+                    callNegotiationId = ""
                 }
             }
         }
