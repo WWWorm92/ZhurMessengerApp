@@ -667,10 +667,12 @@ fun InAppCameraDialog(
                                 .pointerInput(
                                     imageCapture,
                                     videoCapture,
-                                    isCapturing,
-                                    isRecording,
                                     hasAudioPermission,
                                 ) {
+                                    // Keep this gesture coroutine alive while recording.
+                                    // isRecording/isCapturing must NOT be pointerInput keys:
+                                    // changing them would cancel the coroutine before ACTION_UP,
+                                    // which is why the old build required a second tap to stop.
                                     awaitEachGesture {
                                         awaitFirstDown(requireUnconsumed = false)
 
@@ -686,10 +688,13 @@ fun InAppCameraDialog(
                                             if (!isCapturing && !isRecording) {
                                                 startVideo()
                                             }
+
+                                            // Whether the pointer is released normally or the
+                                            // gesture is cancelled, stop the active Recording.
+                                            // activeRecording is assigned synchronously by
+                                            // CameraX before the Start event arrives.
                                             waitForUpOrCancellation()
-                                            if (isRecording || activeRecording != null) {
-                                                stopVideo()
-                                            }
+                                            stopVideo()
                                         }
                                     }
                                 },

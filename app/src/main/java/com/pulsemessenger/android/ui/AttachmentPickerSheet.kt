@@ -230,25 +230,7 @@ fun AttachmentPickerSheetContent(
 
 @Composable
 private fun CameraTile(onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(1f)
-            .clip(RoundedCornerShape(4.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f))
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("📷", fontSize = 30.sp)
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "Камера",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold
-            )
-        }
-    }
+    CameraMiniPreviewTile(onClick = onClick)
 }
 
 @Composable
