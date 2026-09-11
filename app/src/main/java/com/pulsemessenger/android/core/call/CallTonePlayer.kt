@@ -125,12 +125,13 @@ class CallTonePlayer(
 
     @Throws(InterruptedException::class)
     private fun playConnectionLostPattern(running: AtomicBoolean) {
-        // Был низкий 330/260 Гц. Делаем заметно выше и тревожнее.
-        playToneBlocking(880.0, 150, 0.56f, running)
-        sleepWhileRunning(80L, running)
-        playToneBlocking(740.0, 150, 0.56f, running)
-        sleepWhileRunning(80L, running)
-        playToneBlocking(620.0, 260, 0.56f, running)
+        playToneBlocking(660.0, 120, 0.24f, running)
+        sleepWhileRunning(70L, running)
+
+        playToneBlocking(520.0, 140, 0.22f, running)
+        sleepWhileRunning(70L, running)
+
+        playToneBlocking(440.0, 180, 0.20f, running)
     }
 
     fun playCallEnded() {
@@ -177,9 +178,9 @@ class CallTonePlayer(
         // Более заметный нисходящий сигнал сброса. Идёт через media stream,
         // чтобы не пропадать после переключения AudioManager.MODE_NORMAL.
         playToneBlocking(
-            frequencyHz = 980.0,
-            durationMs = 130,
-            volume = 0.78f,
+            frequencyHz = 350.0,
+            durationMs = 350,
+            volume = 0.35f,
             usage = AudioAttributes.USAGE_MEDIA,
             legacyStream = AudioManager.STREAM_MUSIC,
         )
