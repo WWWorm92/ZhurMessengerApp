@@ -1885,6 +1885,45 @@ private fun ConnectionBanner() {
     }
 }
 
+private fun sanitizeUpdateNotes(raw: String): String {
+    val cleaned = mutableListOf<String>()
+
+    for (line in raw.replace("\r\n", "\n").lines()) {
+        val trimmed = line.trim()
+
+        // GitHub's generated release notes append this footer automatically.
+        // It is useful on the release page, but noisy inside the app updater.
+        if (trimmed.contains("Full Changelog", ignoreCase = true)) break
+        if (
+            trimmed.startsWith("http", ignoreCase = true) &&
+            trimmed.contains("/compare/", ignoreCase = true)
+        ) break
+
+        if (trimmed.isBlank()) {
+            if (cleaned.isNotEmpty() && cleaned.last().isNotBlank()) {
+                cleaned += ""
+            }
+            continue
+        }
+
+        val text = trimmed
+            .replace(Regex("""^#{1,6}\s*"""), "")
+            .replace(Regex("""^[-*]\s+"""), "• ")
+            .replace(Regex("""\*\*(.*?)\*\*"""), "$1")
+            .replace(Regex("""__(.*?)__"""), "$1")
+            .replace(Regex("""`([^`]*)`"""), "$1")
+            .replace(Regex("""\[(.*?)]\((.*?)\)"""), "$1")
+            .trim()
+
+        if (text.isNotBlank()) cleaned += text
+    }
+
+    return cleaned
+        .joinToString("\n")
+        .trim()
+        .take(900)
+}
+
 @Composable
 private fun UpdateDialog(
     currentVersion: String,
@@ -1897,7 +1936,7 @@ private fun UpdateDialog(
     onUpdate: () -> Unit,
 ) {
     val progressValue = progress?.coerceIn(0f, 1f)
-    val notes = update.notes.trim().take(1400)
+    val notes = sanitizeUpdateNotes(update.notes)
 
     Dialog(
         onDismissRequest = {
@@ -1923,13 +1962,13 @@ private fun UpdateDialog(
                     modifier = Modifier
                         .size(56.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primaryContainer),
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         text = "↑",
                         style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Bold,
                     )
                 }
@@ -1968,13 +2007,13 @@ private fun UpdateDialog(
                     )
                     Surface(
                         shape = RoundedCornerShape(50.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
                     ) {
                         Text(
                             text = update.version,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                             style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            color = MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.SemiBold,
                         )
                     }

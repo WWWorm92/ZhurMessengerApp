@@ -123,7 +123,7 @@ import com.pulsemessenger.android.ui.ReplyContextBar
 import com.pulsemessenger.android.ui.MessageMetaRow
 import com.pulsemessenger.android.core.notification.PulseNotificationStore
 import com.pulsemessenger.android.ui.AttachmentPickerSheetContent
-import com.pulsemessenger.android.ui.createCameraImageUri
+import com.pulsemessenger.android.ui.InAppCameraDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -159,20 +159,7 @@ fun RoomChatScreen(
         buildRoomMessageListItems(viewModel.messages)
     }
     var galleryPermissionReloadKey by remember { mutableStateOf(0) }
-    var cameraImageUri by remember { mutableStateOf<Uri?>(null) }
-
-    val cameraLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.TakePicture()
-    ) { success ->
-        val uri = cameraImageUri
-
-        if (success && uri != null) {
-            onImageSelected(uri)
-            galleryPermissionReloadKey++
-        }
-
-        cameraImageUri = null
-    }
+    var showInAppCamera by remember { mutableStateOf(false) }
     LaunchedEffect(context, room.id) {
         PulseNotificationStore.clear(context, "room:${room.id}")
     }
@@ -701,10 +688,8 @@ fun RoomChatScreen(
                 AttachmentPickerSheetContent(
                     reloadKey = galleryPermissionReloadKey,
                     onCameraClick = {
-                        val uri = createCameraImageUri(context)
-                        cameraImageUri = uri
                         attachMenuExpanded = false
-                        cameraLauncher.launch(uri)
+                        showInAppCamera = true
                     },
                     onGalleryClick = {
                         attachMenuExpanded = false
@@ -726,6 +711,21 @@ fun RoomChatScreen(
                     }
                 )
             }
+        }
+
+        if (showInAppCamera) {
+            InAppCameraDialog(
+                onDismiss = { showInAppCamera = false },
+                onPhotoSelected = { uri ->
+                    showInAppCamera = false
+                    onImageSelected(uri)
+                    galleryPermissionReloadKey++
+                },
+                onVideoSelected = { uri ->
+                    showInAppCamera = false
+                    onFileSelected(uri)
+                },
+            )
         }
 
         if (showProfileSheet) {
