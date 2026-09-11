@@ -373,14 +373,14 @@ class RealtimeSocketManager(
         onCallError = listener
     }
 
-    fun emitCallInvite(callId: String, targetUserId: Long) {
+    fun emitCallInvite(callId: String, targetUserId: Long, callType: String = "audio") {
         if (callId.isBlank() || targetUserId <= 0L) return
         socket?.emit(
             "call:invite",
             JSONObject()
                 .put("callId", callId)
                 .put("targetUserId", targetUserId)
-                .put("callType", "audio")
+                .put("callType", if (callType == "video") "video" else "audio")
         )
     }
 

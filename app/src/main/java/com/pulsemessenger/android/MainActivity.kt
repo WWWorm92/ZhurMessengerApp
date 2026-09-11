@@ -15,7 +15,6 @@ import com.pulsemessenger.android.core.call.CallForegroundService
 import com.pulsemessenger.android.core.call.ProximityScreenController
 import com.pulsemessenger.android.core.notification.ActiveChatTracker
 import com.pulsemessenger.android.core.notification.PulseNotificationStore
-import com.pulsemessenger.android.core.update.AppUpdatePromptBus
 import com.pulsemessenger.android.ui.PulseAndroidApp
 import com.pulsemessenger.android.ui.theme.PulseAndroidTheme
 
@@ -39,7 +38,6 @@ class MainActivity : ComponentActivity() {
         proximityScreenController = ProximityScreenController(this)
         proximityScreenController.start()
         handleCallIntent(intent)
-        handleAppUpdateIntent(intent)
 
         setContent {
             PulseAndroidTheme {
@@ -52,7 +50,6 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleCallIntent(intent)
-        handleAppUpdateIntent(intent)
     }
 
 
@@ -101,13 +98,6 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    private fun handleAppUpdateIntent(intent: Intent?) {
-        if (intent?.getBooleanExtra(EXTRA_OPEN_APP_UPDATE, false) == true) {
-            intent.removeExtra(EXTRA_OPEN_APP_UPDATE)
-            AppUpdatePromptBus.request()
-        }
-    }
-
     private fun handleCallIntent(intent: Intent?) {
         val action = intent?.action ?: return
         val callId = intent.getStringExtra(EXTRA_CALL_ID).orEmpty()
@@ -116,6 +106,7 @@ class MainActivity : ComponentActivity() {
             .orEmpty()
             .ifBlank { "Pulse" }
         val peerAvatarUrl = intent.getStringExtra(EXTRA_PEER_AVATAR_URL).orEmpty()
+        val callType = if (intent.getStringExtra(EXTRA_CALL_TYPE) == "video") "video" else "audio"
 
         if (
             action == ACTION_CALL_ACCEPT ||
@@ -138,6 +129,7 @@ class MainActivity : ComponentActivity() {
                             peerUserId = peerUserId,
                             peerName = peerName,
                             peerAvatarUrl = peerAvatarUrl,
+                            callType = callType,
                         )
                     )
                 }
@@ -151,6 +143,7 @@ class MainActivity : ComponentActivity() {
                             peerUserId = peerUserId,
                             peerName = peerName,
                             peerAvatarUrl = peerAvatarUrl,
+                            callType = callType,
                         )
                     )
                 }
@@ -188,6 +181,6 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_PEER_USER_ID = "peer_user_id"
         const val EXTRA_PEER_NAME = "peer_name"
         const val EXTRA_PEER_AVATAR_URL = "peer_avatar_url"
-        const val EXTRA_OPEN_APP_UPDATE = "open_app_update"
+        const val EXTRA_CALL_TYPE = "call_type"
     }
 }

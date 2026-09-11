@@ -28,14 +28,10 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.background
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,7 +40,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.shape.CircleShape
 import com.pulsemessenger.android.core.session.LocalSettings
 import com.pulsemessenger.android.core.session.ThemeMode
 import com.pulsemessenger.android.ui.theme.PulseAndroidTheme
@@ -114,7 +109,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.pulsemessenger.android.core.network.RoomDto
 import com.pulsemessenger.android.core.update.AppUpdateInfo
 import com.pulsemessenger.android.core.update.AppUpdateManager
-import com.pulsemessenger.android.core.update.AppUpdatePromptBus
 import com.pulsemessenger.android.ui.HomeTab
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -124,17 +118,11 @@ import java.util.UUID
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Button
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Text
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 
 private fun jwtExpiryMillis(token: String): Long? {
     return try {
@@ -267,9 +255,6 @@ fun PulseAndroidApp() {
     var downloadedUpdatePath by remember { mutableStateOf<String?>(null) }
     var isDownloadingUpdate by remember { mutableStateOf(false) }
     var updateError by remember { mutableStateOf<String?>(null) }
-    var dismissedUpdateVersion by rememberSaveable { mutableStateOf<String?>(null) }
-    var pendingUpdateInstallPermission by remember { mutableStateOf(false) }
-    var updateCheckNonce by remember { mutableStateOf(0L) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -290,11 +275,14 @@ fun PulseAndroidApp() {
     var incomingCall by remember { mutableStateOf<CallUiState?>(null) }
     var activeCall by remember { mutableStateOf<CallUiState?>(null) }
     var pendingOutgoingPeer by remember { mutableStateOf<DialogUserDto?>(null) }
+    var pendingOutgoingCallType by remember { mutableStateOf("audio") }
+    var pendingCallChoicePeer by remember { mutableStateOf<DialogUserDto?>(null) }
     var pendingAcceptCall by remember { mutableStateOf<CallUiState?>(null) }
     var pendingSocketAcceptCall by remember { mutableStateOf<CallUiState?>(null) }
     var pendingSocketRejectCall by remember { mutableStateOf<CallUiState?>(null) }
     var callMuted by remember { mutableStateOf(false) }
     var callSpeakerEnabled by remember { mutableStateOf(false) }
+    var callCameraEnabled by remember { mutableStateOf(true) }
     var callWindowOpen by remember { mutableStateOf(false) }
     var callElapsedSeconds by remember { mutableStateOf(0) }
     var callNegotiationId by remember { mutableStateOf("") }
@@ -303,6 +291,13 @@ fun PulseAndroidApp() {
         return ContextCompat.checkSelfPermission(
             context,
             Manifest.permission.RECORD_AUDIO,
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun hasCameraPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CAMERA,
         ) == PackageManager.PERMISSION_GRANTED
     }
 
@@ -330,11 +325,14 @@ fun PulseAndroidApp() {
         activeCall = null
         incomingCall = null
         pendingOutgoingPeer = null
+        pendingOutgoingCallType = "audio"
+        pendingCallChoicePeer = null
         pendingAcceptCall = null
         pendingSocketAcceptCall = null
         pendingSocketRejectCall = null
         callMuted = false
         callSpeakerEnabled = false
+        callCameraEnabled = true
         callWindowOpen = false
         callNegotiationId = ""
         call?.let {
@@ -348,6 +346,10 @@ fun PulseAndroidApp() {
         activeCall = call.copy(statusText = "Соединяем...", connectedAtMillis = null)
         callElapsedSeconds = 0
         callWindowOpen = true
+        callCameraEnabled = true
+        callManager.setCameraEnabled(true)
+        callSpeakerEnabled = call.callType == "video"
+        callManager.setSpeakerEnabled(callSpeakerEnabled)
         CallNotificationHelper.cancelCallNotification(context.applicationContext, call.callId)
 
         if (realtimeSocketManager.isConnected()) {
@@ -446,27 +448,6 @@ fun PulseAndroidApp() {
         callWindowOpen = false
     }
 
-    fun launchUpdateInstaller(apkPath: String) {
-        if (apkPath.isBlank()) return
-
-        if (
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-            !context.packageManager.canRequestPackageInstalls()
-        ) {
-            pendingUpdateInstallPermission = true
-            context.startActivity(
-                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
-                    data = android.net.Uri.parse("package:${context.packageName}")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-            )
-            return
-        }
-
-        pendingUpdateInstallPermission = false
-        context.startActivity(updateManager.createInstallIntent(File(apkPath)))
-    }
-
     fun downloadUpdate(update: AppUpdateInfo) {
         if (isDownloadingUpdate) return
 
@@ -477,9 +458,7 @@ fun PulseAndroidApp() {
 
             val file = runCatching {
                 updateManager.downloadApk(update) { progress ->
-                    scope.launch {
-                        updateDownloadProgress = progress
-                    }
+                    updateDownloadProgress = progress
                 }
             }.onFailure { error ->
                 Log.e("APP_UPDATE", "download failed", error)
@@ -489,11 +468,7 @@ fun PulseAndroidApp() {
             isDownloadingUpdate = false
 
             if (file == null) {
-                updateError = "Не удалось скачать APK. Попробуйте ещё раз."
-            } else {
-                updateDownloadProgress = 1f
-                delay(150L)
-                launchUpdateInstaller(file.absolutePath)
+                updateError = "Не удалось скачать APK. Нажмите, чтобы повторить."
             }
 
             Log.d("APP_UPDATE", "downloadedPath=$downloadedUpdatePath")
@@ -582,77 +557,88 @@ fun PulseAndroidApp() {
         contract = ActivityResultContracts.RequestPermission()
     ) { _ -> }
 
-    val microphonePermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (!granted) {
-            activeCall = null
-            incomingCall = null
-            pendingOutgoingPeer = null
-            pendingAcceptCall = null
-            return@rememberLauncherForActivityResult
-        }
-
-        val outgoingPeer = pendingOutgoingPeer
-        if (outgoingPeer != null) {
-            val callId = UUID.randomUUID().toString()
-            activeCall = CallUiState(
-                callId = callId,
-                peerUserId = outgoingPeer.id,
-                peerName = outgoingPeer.displayName,
-                peerAvatarUrl = outgoingPeer.avatarUrl,
-                statusText = "Звоним...",
-            )
-            callElapsedSeconds = 0
-            callWindowOpen = true
-            pendingOutgoingPeer = null
-            callSpeakerEnabled = false
-            callManager.setSpeakerEnabled(false)
-            realtimeSocketManager.emitCallInvite(callId, outgoingPeer.id)
-            return@rememberLauncherForActivityResult
-        }
-
-        val call = pendingAcceptCall
-        if (call != null) {
-            pendingAcceptCall = null
-            callSpeakerEnabled = false
-            callManager.setSpeakerEnabled(false)
-            acceptCallAfterPermission(call)
-        }
-    }
-
-
-    fun startOutgoingCall(peer: DialogUserDto) {
-        if (!hasMicPermission()) {
-            pendingOutgoingPeer = peer
-            microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-            return
-        }
-
+    fun beginOutgoingCall(peer: DialogUserDto, callType: String) {
+        val safeCallType = if (callType == "video") "video" else "audio"
         val callId = UUID.randomUUID().toString()
         activeCall = CallUiState(
             callId = callId,
             peerUserId = peer.id,
             peerName = peer.displayName,
             peerAvatarUrl = peer.avatarUrl,
-            statusText = "Звоним...",
+            statusText = if (safeCallType == "video") "Видеозвонок..." else "Звоним...",
+            callType = safeCallType,
         )
         callElapsedSeconds = 0
         callWindowOpen = true
-        callSpeakerEnabled = false
-        callManager.setSpeakerEnabled(false)
-        realtimeSocketManager.emitCallInvite(callId, peer.id)
+        pendingOutgoingPeer = null
+        pendingOutgoingCallType = "audio"
+        callCameraEnabled = true
+        callManager.setCameraEnabled(true)
+        callSpeakerEnabled = safeCallType == "video"
+        callManager.setSpeakerEnabled(callSpeakerEnabled)
+        realtimeSocketManager.emitCallInvite(callId, peer.id, safeCallType)
     }
 
-    fun acceptIncomingCall(call: CallUiState) {
-        if (!hasMicPermission()) {
-            pendingAcceptCall = call
-            microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    val callPermissionsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ ->
+        val outgoingPeer = pendingOutgoingPeer
+        if (outgoingPeer != null) {
+            val callType = pendingOutgoingCallType
+            val allowed = hasMicPermission() && (callType != "video" || hasCameraPermission())
+            if (!allowed) {
+                pendingOutgoingPeer = null
+                pendingOutgoingCallType = "audio"
+                return@rememberLauncherForActivityResult
+            }
+            beginOutgoingCall(outgoingPeer, callType)
+            return@rememberLauncherForActivityResult
+        }
+
+        val call = pendingAcceptCall
+        if (call != null) {
+            val allowed = hasMicPermission() && (call.callType != "video" || hasCameraPermission())
+            if (!allowed) {
+                pendingAcceptCall = null
+                incomingCall = null
+                CallNotificationHelper.cancelCallNotification(context.applicationContext, call.callId)
+                realtimeSocketManager.emitCallReject(call.callId, call.peerUserId)
+                return@rememberLauncherForActivityResult
+            }
+            pendingAcceptCall = null
+            acceptCallAfterPermission(call)
+        }
+    }
+
+    fun startOutgoingCall(peer: DialogUserDto, callType: String) {
+        val safeCallType = if (callType == "video") "video" else "audio"
+        val neededPermissions = buildList {
+            if (!hasMicPermission()) add(Manifest.permission.RECORD_AUDIO)
+            if (safeCallType == "video" && !hasCameraPermission()) add(Manifest.permission.CAMERA)
+        }
+
+        if (neededPermissions.isNotEmpty()) {
+            pendingOutgoingPeer = peer
+            pendingOutgoingCallType = safeCallType
+            callPermissionsLauncher.launch(neededPermissions.toTypedArray())
             return
         }
 
-        callSpeakerEnabled = false
-        callManager.setSpeakerEnabled(false)
+        beginOutgoingCall(peer, safeCallType)
+    }
+
+    fun acceptIncomingCall(call: CallUiState) {
+        val neededPermissions = buildList {
+            if (!hasMicPermission()) add(Manifest.permission.RECORD_AUDIO)
+            if (call.callType == "video" && !hasCameraPermission()) add(Manifest.permission.CAMERA)
+        }
+
+        if (neededPermissions.isNotEmpty()) {
+            pendingAcceptCall = call
+            callPermissionsLauncher.launch(neededPermissions.toTypedArray())
+            return
+        }
+
         acceptCallAfterPermission(call)
     }
 
@@ -764,7 +750,8 @@ fun PulseAndroidApp() {
                             peerUserId = action.peerUserId,
                             peerName = action.peerName,
                             peerAvatarUrl = action.peerAvatarUrl.ifBlank { avatarForUser(action.peerUserId) },
-                            statusText = "Входящий звонок",
+                            statusText = if (action.callType == "video") "Входящий видеозвонок" else "Входящий звонок",
+                            callType = action.callType,
                             incoming = true,
                         )
                     }
@@ -777,17 +764,11 @@ fun PulseAndroidApp() {
                         peerName = action.peerName,
                         peerAvatarUrl = action.peerAvatarUrl.ifBlank { avatarForUser(action.peerUserId) },
                         statusText = "Соединяем...",
+                        callType = action.callType,
                         incoming = true,
                     )
 
-                    if (!hasMicPermission()) {
-                        pendingAcceptCall = call
-                        microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    } else {
-                        callSpeakerEnabled = false
-                        callManager.setSpeakerEnabled(false)
-                        acceptCallAfterPermission(call)
-                    }
+                    acceptIncomingCall(call)
                 }
 
                 is CallNotificationAction.OpenCurrent -> {
@@ -889,14 +870,6 @@ fun PulseAndroidApp() {
     }
 
     LaunchedEffect(Unit) {
-        AppUpdatePromptBus.requests.collect {
-            updateCheckNonce += 1L
-        }
-    }
-
-    LaunchedEffect(appInForeground, updateCheckNonce) {
-        if (!appInForeground) return@LaunchedEffect
-
         while (true) {
             Log.d("APP_UPDATE", "checking local=${BuildConfig.VERSION_NAME}")
 
@@ -929,19 +902,6 @@ fun PulseAndroidApp() {
             }
 
             delay(6 * 60 * 60 * 1000L)
-        }
-    }
-
-    LaunchedEffect(appInForeground, pendingUpdateInstallPermission, downloadedUpdatePath) {
-        val apkPath = downloadedUpdatePath
-        if (
-            appInForeground &&
-            pendingUpdateInstallPermission &&
-            !apkPath.isNullOrBlank() &&
-            (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || context.packageManager.canRequestPackageInstalls())
-        ) {
-            delay(250L)
-            launchUpdateInstaller(apkPath)
         }
     }
 
@@ -1081,6 +1041,7 @@ fun PulseAndroidApp() {
                 val fromAvatarUrl = payload.optString("fromAvatarUrl")
                     .ifBlank { payload.optString("avatarUrl") }
                     .ifBlank { avatarForUser(fromUserId) }
+                val callType = if (payload.optString("callType") == "video") "video" else "audio"
 
                 if (callId.isBlank() || fromUserId <= 0L) {
                     return@launch
@@ -1096,7 +1057,8 @@ fun PulseAndroidApp() {
                     peerUserId = fromUserId,
                     peerName = fromName,
                     peerAvatarUrl = fromAvatarUrl,
-                    statusText = "Входящий звонок",
+                    statusText = if (callType == "video") "Входящий видеозвонок" else "Входящий звонок",
+                    callType = callType,
                     incoming = true,
                 )
                 incomingCall = call
@@ -1107,6 +1069,7 @@ fun PulseAndroidApp() {
                         fromUserId = call.peerUserId,
                         fromName = call.peerName,
                         fromAvatarUrl = call.peerAvatarUrl,
+                        callType = call.callType,
                     )
                 }
             }
@@ -1133,6 +1096,11 @@ fun PulseAndroidApp() {
                 // На реальном звонке между accept и CONNECTED может быть несколько секунд
                 // состояния "Соединяем..."; гудки должны продолжаться до "Звонок активен".
 
+                if (callManager.hasPeerConnection()) {
+                    Log.d("WEBRTC_CALL", "duplicate call:accepted ignored")
+                    return@launch
+                }
+
                 val negotiationId = UUID.randomUUID().toString()
                 callNegotiationId = negotiationId
                 callManager.updateIceServers(callIceConfigRepository.load(force = false))
@@ -1150,7 +1118,7 @@ fun PulseAndroidApp() {
                 callManager.onStatusChanged = { status ->
                     updateActiveCallStatus(status)
                 }
-                callManager.startAsCaller { offer ->
+                callManager.startAsCaller(videoEnabled = call.callType == "video") { offer ->
                     realtimeSocketManager.emitCallOffer(
                         callId = call.callId,
                         targetUserId = call.peerUserId,
@@ -1208,7 +1176,11 @@ fun PulseAndroidApp() {
                     // existing call instead of destroying the audio session.
                     callManager.handleRemoteOffer(offer, sendAnswer)
                 } else {
-                    callManager.startAsCallee(offer, sendAnswer)
+                    callManager.startAsCallee(
+                        remoteOffer = offer,
+                        videoEnabled = call.callType == "video",
+                        onLocalAnswer = sendAnswer,
+                    )
                 }
             }
         }
@@ -1488,7 +1460,7 @@ fun PulseAndroidApp() {
                                     forwardPayloads = buildDmForwardPayloads(ids)
                                 },
                                 onCallClick = {
-                                    startOutgoingCall(peer)
+                                    pendingCallChoicePeer = peer
                                 }
                             )
                         } else if (room != null && roomSettingsOpen) {
@@ -1779,10 +1751,56 @@ fun PulseAndroidApp() {
                 if (authViewModel.isAuthorized && !realtimeConnected) {
                     ConnectionBanner()
                 }
+                val update = availableUpdate
+                if (update != null) {
+                    UpdateBanner(
+                        version = update.version,
+                        isDownloading = isDownloadingUpdate,
+                        progress = updateDownloadProgress,
+                        downloaded = downloadedUpdatePath != null,
+                        error = updateError,
+                        onAction = {
+                            val apkPath = downloadedUpdatePath
+
+                            if (apkPath == null) {
+                                downloadUpdate(update)
+                                return@UpdateBanner
+                            }
+
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                                        data = android.net.Uri.parse("package:${context.packageName}")
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                )
+                            } else {
+                                context.startActivity(updateManager.createInstallIntent(File(apkPath)))
+                            }
+                        }
+                    )
+                }
+
+                pendingCallChoicePeer?.let { peer ->
+                    CallTypeChooserDialog(
+                        peerName = peer.displayName,
+                        onDismiss = { pendingCallChoicePeer = null },
+                        onAudioCall = {
+                            pendingCallChoicePeer = null
+                            startOutgoingCall(peer, "audio")
+                        },
+                        onVideoCall = {
+                            pendingCallChoicePeer = null
+                            startOutgoingCall(peer, "video")
+                        },
+                    )
+                }
+
                 incomingCall?.let { call ->
                     IncomingCallOverlay(
                         callerName = call.peerName,
                         callerAvatarUrl = call.peerAvatarUrl,
+                        videoCall = call.callType == "video",
                         onAccept = { acceptIncomingCall(call) },
                         onReject = {
                             realtimeSocketManager.emitCallReject(call.callId, call.peerUserId)
@@ -1804,6 +1822,9 @@ fun PulseAndroidApp() {
                             durationSeconds = callElapsedSeconds,
                             muted = callMuted,
                             speakerEnabled = callSpeakerEnabled,
+                            videoCall = call.callType == "video",
+                            cameraEnabled = callCameraEnabled,
+                            callManager = callManager,
                             onBackToDialog = { openCallDialog(call) },
                             onToggleMute = {
                                 callMuted = !callMuted
@@ -1813,6 +1834,11 @@ fun PulseAndroidApp() {
                                 callSpeakerEnabled = !callSpeakerEnabled
                                 callManager.setSpeakerEnabled(callSpeakerEnabled)
                             },
+                            onToggleCamera = {
+                                callCameraEnabled = !callCameraEnabled
+                                callManager.setCameraEnabled(callCameraEnabled)
+                            },
+                            onSwitchCamera = { callManager.switchCamera() },
                             onEnd = { endCurrentCall(sendEvent = true) },
                         )
                     } else {
@@ -1821,39 +1847,10 @@ fun PulseAndroidApp() {
                             peerAvatarUrl = call.peerAvatarUrl,
                             statusText = call.statusText,
                             durationSeconds = callElapsedSeconds,
+                            videoCall = call.callType == "video",
                             onOpen = { callWindowOpen = true },
                         )
                     }
-                }
-
-                val update = availableUpdate
-                if (
-                    update != null &&
-                    dismissedUpdateVersion != update.version &&
-                    incomingCall == null &&
-                    activeCall == null
-                ) {
-                    UpdateDialog(
-                        currentVersion = BuildConfig.VERSION_NAME,
-                        update = update,
-                        isDownloading = isDownloadingUpdate,
-                        progress = updateDownloadProgress,
-                        downloaded = downloadedUpdatePath != null,
-                        error = updateError,
-                        onLater = {
-                            if (!isDownloadingUpdate) {
-                                dismissedUpdateVersion = update.version
-                            }
-                        },
-                        onUpdate = {
-                            val apkPath = downloadedUpdatePath
-                            if (apkPath.isNullOrBlank()) {
-                                downloadUpdate(update)
-                            } else {
-                                launchUpdateInstaller(apkPath)
-                            }
-                        },
-                    )
                 }
             }
         }
@@ -1867,6 +1864,7 @@ private data class CallUiState(
     val peerName: String,
     val peerAvatarUrl: String = "",
     val statusText: String,
+    val callType: String = "audio",
     val incoming: Boolean = false,
     val connectedAtMillis: Long? = null,
 )
@@ -1952,215 +1950,66 @@ private fun ConnectionBanner() {
     }
 }
 
-private fun sanitizeUpdateNotes(raw: String): String {
-    val cleaned = mutableListOf<String>()
-
-    for (line in raw.replace("\r\n", "\n").lines()) {
-        val trimmed = line.trim()
-
-        // GitHub's generated release notes append this footer automatically.
-        // It is useful on the release page, but noisy inside the app updater.
-        if (trimmed.contains("Full Changelog", ignoreCase = true)) break
-        if (
-            trimmed.startsWith("http", ignoreCase = true) &&
-            trimmed.contains("/compare/", ignoreCase = true)
-        ) break
-
-        if (trimmed.isBlank()) {
-            if (cleaned.isNotEmpty() && cleaned.last().isNotBlank()) {
-                cleaned += ""
-            }
-            continue
-        }
-
-        val text = trimmed
-            .replace(Regex("""^#{1,6}\s*"""), "")
-            .replace(Regex("""^[-*]\s+"""), "• ")
-            .replace(Regex("""\*\*(.*?)\*\*"""), "$1")
-            .replace(Regex("""__(.*?)__"""), "$1")
-            .replace(Regex("""`([^`]*)`"""), "$1")
-            .replace(Regex("""\[(.*?)]\((.*?)\)"""), "$1")
-            .trim()
-
-        if (text.isNotBlank()) cleaned += text
-    }
-
-    return cleaned
-        .joinToString("\n")
-        .trim()
-        .take(900)
-}
-
 @Composable
-private fun UpdateDialog(
-    currentVersion: String,
-    update: AppUpdateInfo,
+private fun UpdateBanner(
+    version: String,
     isDownloading: Boolean,
     progress: Float?,
     downloaded: Boolean,
     error: String?,
-    onLater: () -> Unit,
-    onUpdate: () -> Unit,
+    onAction: () -> Unit,
 ) {
-    val progressValue = progress?.coerceIn(0f, 1f)
-    val notes = sanitizeUpdateNotes(update.notes)
-
-    Dialog(
-        onDismissRequest = {
-            if (!isDownloading) onLater()
-        },
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 64.dp, start = 16.dp, end = 16.dp),
+        contentAlignment = Alignment.TopCenter,
     ) {
         Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 22.dp)
-                .widthIn(max = 460.dp),
-            shape = RoundedCornerShape(30.dp),
+            shape = RoundedCornerShape(22.dp),
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface,
-            ),
+                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
+            )
         ) {
-            Column(
-                modifier = Modifier.padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(56.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)),
-                    contentAlignment = Alignment.Center,
-                ) {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "↑",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold,
+                        text = "Доступна версия $version",
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
                     )
-                }
 
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        text = "Доступна новая версия",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
+                        text = when {
+                            isDownloading -> "Загрузка ${progress?.let { "${(it * 100).toInt()}%" } ?: "..."}"
+                            downloaded -> "APK скачан, можно установить"
+                            !error.isNullOrBlank() -> error
+                            else -> "Нажмите, чтобы скачать обновление"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (!error.isNullOrBlank()) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                     )
-                    Text(
-                        text = "Zhuravlik ${update.version} готов к установке",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(50.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                    ) {
-                        Text(
-                            text = currentVersion,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                            style = MaterialTheme.typography.labelLarge,
-                        )
-                    }
-                    Text(
-                        text = "→",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Surface(
-                        shape = RoundedCornerShape(50.dp),
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-                    ) {
-                        Text(
-                            text = update.version,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    }
-                }
-
-                if (notes.isNotBlank()) {
-                    Card(
-                        shape = RoundedCornerShape(20.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                        ),
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Text(
-                                text = "Что нового",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            Text(
-                                text = notes,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 8,
-                            )
-                        }
-                    }
                 }
 
                 if (isDownloading) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (progressValue != null) {
-                            LinearProgressIndicator(
-                                progress = { progressValue },
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        } else {
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        }
-                        Text(
-                            text = progressValue?.let { "Скачиваем обновление · ${(it * 100).toInt()}%" }
-                                ?: "Скачиваем обновление…",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-
-                if (!error.isNullOrBlank()) {
-                    Text(
-                        text = error,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp
                     )
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TextButton(
-                        onClick = onLater,
-                        enabled = !isDownloading,
-                    ) {
-                        Text("Позже")
-                    }
-                    Spacer(modifier = Modifier.size(8.dp))
-                    Button(
-                        onClick = onUpdate,
-                        enabled = !isDownloading,
-                    ) {
+                } else {
+                    FilledIconButton(onClick = onAction) {
                         Text(
-                            when {
-                                isDownloading -> "Скачиваем…"
-                                downloaded -> "Установить"
-                                !error.isNullOrBlank() -> "Повторить"
-                                else -> "Обновить"
+                            text = when {
+                                downloaded -> "OK"
+                                !error.isNullOrBlank() -> "↻"
+                                else -> "↓"
                             }
                         )
                     }
@@ -2169,4 +2018,3 @@ private fun UpdateDialog(
         }
     }
 }
-

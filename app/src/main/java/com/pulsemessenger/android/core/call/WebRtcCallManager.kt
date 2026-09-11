@@ -6,6 +6,12 @@ import android.os.Handler
 import android.os.Looper
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
+import org.webrtc.Camera1Enumerator
+import org.webrtc.Camera2Enumerator
+import org.webrtc.CameraVideoCapturer
+import org.webrtc.DefaultVideoDecoderFactory
+import org.webrtc.DefaultVideoEncoderFactory
+import org.webrtc.EglBase
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.PeerConnection
@@ -13,6 +19,12 @@ import org.webrtc.PeerConnectionFactory
 import org.webrtc.RtpReceiver
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
+import org.webrtc.SurfaceTextureHelper
+import org.webrtc.SurfaceViewRenderer
+import org.webrtc.VideoSink
+import org.webrtc.VideoSource
+import org.webrtc.VideoTrack
+import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.atomic.AtomicBoolean
 
 data class CallIcePayload(
@@ -26,16 +38,26 @@ class WebRtcCallManager(
 ) {
     companion object {
         private const val TAG = "WEBRTC_CALL"
-        private const val VERSION = "webrtc-v6-ice-generation-2026-09-11"
+        private const val VERSION = "webrtc-v7-video-2026-09-11"
     }
 
     private val initialized = AtomicBoolean(false)
 
+    private val eglBase: EglBase = EglBase.create()
     private var factory: PeerConnectionFactory? = null
     private var peerConnection: PeerConnection? = null
     private var audioSource: AudioSource? = null
     private var audioTrack: AudioTrack? = null
+    private var videoSource: VideoSource? = null
+    private var localVideoTrack: VideoTrack? = null
+    private var remoteVideoTrack: VideoTrack? = null
+    private var videoCapturer: CameraVideoCapturer? = null
+    private var surfaceTextureHelper: SurfaceTextureHelper? = null
     private var audioManager: AudioManager? = null
+    private var videoCallEnabled = false
+    private var cameraEnabled = true
+    private val localVideoSinks = CopyOnWriteArraySet<VideoSink>()
+    private val remoteVideoSinks = CopyOnWriteArraySet<VideoSink>()
 
     private val pendingRemoteIce = mutableListOf<CallIcePayload>()
     private var remoteDescriptionSet = false
@@ -59,16 +81,19 @@ class WebRtcCallManager(
     var onRecoveryNeeded: (() -> Unit)? = null
 
     fun startAsCaller(
+        videoEnabled: Boolean = false,
         onLocalOffer: (String) -> Unit,
     ) {
-        android.util.Log.d(TAG, "manager version=$VERSION startAsCaller")
+        android.util.Log.d(TAG, "manager version=$VERSION startAsCaller video=$videoEnabled")
         resetPeerConnectionOnly()
-        preparePeerConnection(addLocalAudio = true)
+        videoCallEnabled = videoEnabled
+        cameraEnabled = true
+        preparePeerConnection(addLocalAudio = true, addLocalVideo = videoEnabled)
         onStatusChanged?.invoke("Соединяем...")
 
         val constraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", videoEnabled.toString()))
         }
 
         peerConnection?.createOffer(object : SimpleSdpObserver() {
@@ -102,11 +127,14 @@ class WebRtcCallManager(
 
     fun startAsCallee(
         remoteOffer: String,
+        videoEnabled: Boolean = false,
         onLocalAnswer: (String) -> Unit,
     ) {
-        android.util.Log.d(TAG, "manager version=$VERSION startAsCallee")
+        android.util.Log.d(TAG, "manager version=$VERSION startAsCallee video=$videoEnabled")
         resetPeerConnectionOnly()
-        preparePeerConnection(addLocalAudio = false)
+        videoCallEnabled = videoEnabled
+        cameraEnabled = true
+        preparePeerConnection(addLocalAudio = false, addLocalVideo = false)
         onStatusChanged?.invoke("Принимаем звонок...")
 
         handleRemoteOffer(remoteOffer, onLocalAnswer)
@@ -202,7 +230,7 @@ class WebRtcCallManager(
 
         val constraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", videoCallEnabled.toString()))
             mandatory.add(MediaConstraints.KeyValuePair("IceRestart", "true"))
         }
 
@@ -250,11 +278,14 @@ class WebRtcCallManager(
                 android.util.Log.d(TAG, "remote offer set successfully")
 
                 ensureLocalAudioTrack()
+                if (videoCallEnabled) {
+                    ensureLocalVideoTrack()
+                }
                 flushPendingRemoteIce()
 
                 val constraints = MediaConstraints().apply {
                     mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", videoCallEnabled.toString()))
                 }
 
                 peerConnection?.createAnswer(object : SimpleSdpObserver() {
@@ -415,6 +446,52 @@ class WebRtcCallManager(
 
     fun isSpeakerEnabled(): Boolean = speakerEnabled
 
+    fun isVideoCall(): Boolean = videoCallEnabled
+
+    fun setCameraEnabled(enabled: Boolean) {
+        cameraEnabled = enabled
+        localVideoTrack?.setEnabled(enabled)
+    }
+
+    fun isCameraEnabled(): Boolean = cameraEnabled
+
+    fun switchCamera() {
+        val capturer = videoCapturer ?: return
+        capturer.switchCamera(object : CameraVideoCapturer.CameraSwitchHandler {
+            override fun onCameraSwitchDone(isFrontCamera: Boolean) {
+                android.util.Log.d(TAG, "camera switched front=$isFrontCamera")
+            }
+
+            override fun onCameraSwitchError(errorDescription: String?) {
+                android.util.Log.w(TAG, "camera switch failed: $errorDescription")
+            }
+        })
+    }
+
+    fun bindVideoRenderer(renderer: SurfaceViewRenderer, local: Boolean) {
+        renderer.init(eglBase.eglBaseContext, null)
+        renderer.setEnableHardwareScaler(true)
+        renderer.setMirror(local)
+        if (local) {
+            renderer.setZOrderMediaOverlay(true)
+            localVideoSinks += renderer
+            localVideoTrack?.addSink(renderer)
+        } else {
+            remoteVideoSinks += renderer
+            remoteVideoTrack?.addSink(renderer)
+        }
+    }
+
+    fun unbindVideoRenderer(renderer: SurfaceViewRenderer, local: Boolean) {
+        if (local) {
+            localVideoTrack?.removeSink(renderer)
+            localVideoSinks -= renderer
+        } else {
+            remoteVideoTrack?.removeSink(renderer)
+            remoteVideoSinks -= renderer
+        }
+    }
+
     private fun cancelDisconnectWarning() {
         disconnectWarningTask?.let(connectionHandler::removeCallbacks)
         disconnectWarningTask = null
@@ -456,6 +533,10 @@ class WebRtcCallManager(
             audioSource?.dispose()
             audioSource = null
 
+            releaseVideoCapture()
+            videoCallEnabled = false
+            cameraEnabled = true
+
             audioManager?.mode = AudioManager.MODE_NORMAL
             audioManager?.isSpeakerphoneOn = false
             audioManager = null
@@ -485,7 +566,7 @@ class WebRtcCallManager(
         android.util.Log.d(TAG, "ICE configuration refreshed servers=${servers.size} applied=$updated")
     }
 
-    private fun preparePeerConnection(addLocalAudio: Boolean) {
+    private fun preparePeerConnection(addLocalAudio: Boolean, addLocalVideo: Boolean) {
         ensureFactory()
 
         audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -514,8 +595,12 @@ class WebRtcCallManager(
                 override fun onRemoveStream(stream: org.webrtc.MediaStream?) = Unit
                 override fun onDataChannel(channel: org.webrtc.DataChannel?) = Unit
                 override fun onRenegotiationNeeded() = Unit
-                override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out org.webrtc.MediaStream>?) = Unit
-                override fun onTrack(transceiver: org.webrtc.RtpTransceiver?) = Unit
+                override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out org.webrtc.MediaStream>?) {
+                    attachRemoteVideoTrack(receiver?.track())
+                }
+                override fun onTrack(transceiver: org.webrtc.RtpTransceiver?) {
+                    attachRemoteVideoTrack(transceiver?.receiver?.track())
+                }
 
                 override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
                     android.util.Log.d("WEBRTC_CALL", "iceConnection=$state")
@@ -578,6 +663,9 @@ class WebRtcCallManager(
         if (addLocalAudio) {
             ensureLocalAudioTrack()
         }
+        if (addLocalVideo) {
+            ensureLocalVideoTrack()
+        }
 
         setSpeakerEnabled(speakerEnabled)
     }
@@ -598,6 +686,92 @@ class WebRtcCallManager(
         } else {
             android.util.Log.e("WEBRTC_CALL", "local audio track create failed")
         }
+    }
+
+    private fun ensureLocalVideoTrack() {
+        if (!videoCallEnabled || localVideoTrack != null) return
+
+        val peerFactory = factory ?: return
+        val capturer = createCameraCapturer()
+        if (capturer == null) {
+            android.util.Log.e(TAG, "no camera capturer available")
+            return
+        }
+
+        val helper = SurfaceTextureHelper.create("PulseVideoCapture", eglBase.eglBaseContext)
+        val source = peerFactory.createVideoSource(false)
+
+        try {
+            capturer.initialize(helper, context, source.capturerObserver)
+            capturer.startCapture(1280, 720, 24)
+        } catch (error: Throwable) {
+            android.util.Log.e(TAG, "camera start failed", error)
+            runCatching { capturer.dispose() }
+            runCatching { source.dispose() }
+            runCatching { helper.dispose() }
+            return
+        }
+
+        val track = peerFactory.createVideoTrack("pulse_video_track", source)
+        track.setEnabled(cameraEnabled)
+        localVideoSinks.forEach { sink -> track.addSink(sink) }
+
+        videoCapturer = capturer
+        surfaceTextureHelper = helper
+        videoSource = source
+        localVideoTrack = track
+
+        val sender = peerConnection?.addTrack(track, listOf("pulse_video_stream"))
+        android.util.Log.d(TAG, "local video track added=${sender != null}")
+    }
+
+    private fun createCameraCapturer(): CameraVideoCapturer? {
+        val enumerator = if (Camera2Enumerator.isSupported(context)) {
+            Camera2Enumerator(context)
+        } else {
+            Camera1Enumerator(false)
+        }
+
+        val names = enumerator.deviceNames.toList()
+        val preferred = names.firstOrNull { enumerator.isFrontFacing(it) }
+            ?: names.firstOrNull { enumerator.isBackFacing(it) }
+            ?: names.firstOrNull()
+            ?: return null
+
+        return enumerator.createCapturer(preferred, null) as? CameraVideoCapturer
+    }
+
+    private fun attachRemoteVideoTrack(track: org.webrtc.MediaStreamTrack?) {
+        val videoTrack = track as? VideoTrack ?: return
+        if (remoteVideoTrack === videoTrack) return
+
+        remoteVideoTrack?.let { oldTrack ->
+            remoteVideoSinks.forEach { sink -> oldTrack.removeSink(sink) }
+        }
+        remoteVideoTrack = videoTrack
+        remoteVideoSinks.forEach { sink -> videoTrack.addSink(sink) }
+        android.util.Log.d(TAG, "remote video track attached")
+    }
+
+    private fun releaseVideoCapture() {
+        remoteVideoTrack?.let { track ->
+            remoteVideoSinks.forEach { sink -> track.removeSink(sink) }
+        }
+        localVideoTrack?.let { track ->
+            localVideoSinks.forEach { sink -> track.removeSink(sink) }
+        }
+
+        runCatching { videoCapturer?.stopCapture() }
+        runCatching { videoCapturer?.dispose() }
+        runCatching { localVideoTrack?.dispose() }
+        runCatching { videoSource?.dispose() }
+        runCatching { surfaceTextureHelper?.dispose() }
+
+        videoCapturer = null
+        localVideoTrack = null
+        remoteVideoTrack = null
+        videoSource = null
+        surfaceTextureHelper = null
     }
 
     private fun flushPendingRemoteIce() {
@@ -654,9 +828,12 @@ class WebRtcCallManager(
             audioTrack?.dispose()
             audioSource?.dispose()
         }
+        releaseVideoCapture()
 
         audioTrack = null
         audioSource = null
+        videoCallEnabled = false
+        cameraEnabled = true
     }
 
     private fun normalizeLocalSdp(sdp: String): String {
@@ -712,6 +889,12 @@ class WebRtcCallManager(
         }
 
         factory = PeerConnectionFactory.builder()
+            .setVideoEncoderFactory(
+                DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true)
+            )
+            .setVideoDecoderFactory(
+                DefaultVideoDecoderFactory(eglBase.eglBaseContext)
+            )
             .createPeerConnectionFactory()
     }
 

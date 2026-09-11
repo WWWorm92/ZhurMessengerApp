@@ -33,6 +33,7 @@ object CallNotificationHelper {
         fromUserId: Long,
         fromName: String,
         fromAvatarUrl: String = "",
+        callType: String = "audio",
     ) {
         if (callId.isBlank() || fromUserId <= 0L) return
         if (ResolvedCallStore.isResolved(context, callId)) return
@@ -57,7 +58,7 @@ object CallNotificationHelper {
                 Intent.FLAG_ACTIVITY_NEW_TASK or
                     Intent.FLAG_ACTIVITY_CLEAR_TOP or
                     Intent.FLAG_ACTIVITY_SINGLE_TOP
-            putCallExtras(callId, fromUserId, fromName, fromAvatarUrl)
+            putCallExtras(callId, fromUserId, fromName, fromAvatarUrl, callType)
         }
 
         val acceptIntent = Intent(context, MainActivity::class.java).apply {
@@ -66,12 +67,12 @@ object CallNotificationHelper {
                 Intent.FLAG_ACTIVITY_NEW_TASK or
                     Intent.FLAG_ACTIVITY_CLEAR_TOP or
                     Intent.FLAG_ACTIVITY_SINGLE_TOP
-            putCallExtras(callId, fromUserId, fromName, fromAvatarUrl)
+            putCallExtras(callId, fromUserId, fromName, fromAvatarUrl, callType)
         }
 
         val rejectIntent = Intent(context, CallNotificationReceiver::class.java).apply {
             action = CallNotificationReceiver.ACTION_REJECT
-            putCallExtras(callId, fromUserId, fromName, fromAvatarUrl)
+            putCallExtras(callId, fromUserId, fromName, fromAvatarUrl, callType)
         }
 
         val openPendingIntent = PendingIntent.getActivity(
@@ -113,8 +114,8 @@ object CallNotificationHelper {
             PulseNotificationStore.CALL_CHANNEL_ID,
         )
             .setSmallIcon(R.mipmap.ic_launcher_round)
-            .setContentTitle("Входящий звонок")
-            .setContentText("$fromName звонит")
+            .setContentTitle(if (callType == "video") "Входящий видеозвонок" else "Входящий звонок")
+            .setContentText(if (callType == "video") "$fromName приглашает в видеозвонок" else "$fromName звонит")
             .setSubText("Zhuravlik")
             .setStyle(callStyle)
             .setContentIntent(openPendingIntent)
@@ -192,10 +193,12 @@ object CallNotificationHelper {
         peerUserId: Long,
         peerName: String,
         peerAvatarUrl: String,
+        callType: String,
     ) {
         putExtra(MainActivity.EXTRA_CALL_ID, callId)
         putExtra(MainActivity.EXTRA_PEER_USER_ID, peerUserId)
         putExtra(MainActivity.EXTRA_PEER_NAME, peerName)
         putExtra(MainActivity.EXTRA_PEER_AVATAR_URL, peerAvatarUrl)
+        putExtra(MainActivity.EXTRA_CALL_TYPE, if (callType == "video") "video" else "audio")
     }
 }

@@ -9,6 +9,7 @@ sealed class CallNotificationAction {
         val peerUserId: Long,
         val peerName: String,
         val peerAvatarUrl: String = "",
+        val callType: String = "audio",
     ) : CallNotificationAction()
 
     data class Accept(
@@ -16,6 +17,7 @@ sealed class CallNotificationAction {
         val peerUserId: Long,
         val peerName: String,
         val peerAvatarUrl: String = "",
+        val callType: String = "audio",
     ) : CallNotificationAction()
 
     data class Reject(

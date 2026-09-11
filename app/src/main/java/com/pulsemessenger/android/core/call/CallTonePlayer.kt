@@ -101,7 +101,7 @@ class CallTonePlayer(
             try {
                 while (connectionLostRunning.get()) {
                     playConnectionLostPattern(connectionLostRunning)
-                    sleepWhileRunning(1900L, connectionLostRunning)
+                    sleepWhileRunning(2700L, connectionLostRunning)
                 }
             } catch (_: InterruptedException) {
                 // stopConnectionLost() interrupts this thread intentionally.
@@ -125,12 +125,11 @@ class CallTonePlayer(
 
     @Throws(InterruptedException::class)
     private fun playConnectionLostPattern(running: AtomicBoolean) {
+        // Мягкий нисходящий трёхтональный сигнал потери соединения.
         playToneBlocking(660.0, 120, 0.24f, running)
         sleepWhileRunning(70L, running)
-
         playToneBlocking(520.0, 140, 0.22f, running)
         sleepWhileRunning(70L, running)
-
         playToneBlocking(440.0, 180, 0.20f, running)
     }
 
@@ -175,28 +174,10 @@ class CallTonePlayer(
 
     @Throws(InterruptedException::class)
     private fun playHangupToneBlocking() {
-        // Более заметный нисходящий сигнал сброса. Идёт через media stream,
-        // чтобы не пропадать после переключения AudioManager.MODE_NORMAL.
         playToneBlocking(
             frequencyHz = 350.0,
             durationMs = 350,
-            volume = 0.35f,
-            usage = AudioAttributes.USAGE_MEDIA,
-            legacyStream = AudioManager.STREAM_MUSIC,
-        )
-        Thread.sleep(45)
-        playToneBlocking(
-            frequencyHz = 650.0,
-            durationMs = 160,
-            volume = 0.78f,
-            usage = AudioAttributes.USAGE_MEDIA,
-            legacyStream = AudioManager.STREAM_MUSIC,
-        )
-        Thread.sleep(45)
-        playToneBlocking(
-            frequencyHz = 360.0,
-            durationMs = 320,
-            volume = 0.78f,
+            volume = 0.44f,
             usage = AudioAttributes.USAGE_MEDIA,
             legacyStream = AudioManager.STREAM_MUSIC,
         )
@@ -245,8 +226,17 @@ class CallTonePlayer(
             while (writtenSamples < totalSamples && (keepPlaying == null || keepPlaying.get())) {
                 val count = minOf(chunk.size, totalSamples - writtenSamples)
 
+                val fadeSamples = minOf(sampleRate * 18 / 1000, totalSamples / 2)
                 for (i in 0 until count) {
-                    chunk[i] = (sin(phase) * Short.MAX_VALUE * volume).toInt().toShort()
+                    val absoluteIndex = writtenSamples + i
+                    val envelope = when {
+                        fadeSamples <= 0 -> 1.0
+                        absoluteIndex < fadeSamples -> absoluteIndex.toDouble() / fadeSamples.toDouble()
+                        absoluteIndex >= totalSamples - fadeSamples ->
+                            (totalSamples - absoluteIndex - 1).coerceAtLeast(0).toDouble() / fadeSamples.toDouble()
+                        else -> 1.0
+                    }
+                    chunk[i] = (sin(phase) * Short.MAX_VALUE * volume * envelope).toInt().toShort()
                     phase += phaseStep
                     if (phase > 2.0 * PI) phase -= 2.0 * PI
                 }

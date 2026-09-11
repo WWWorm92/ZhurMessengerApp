@@ -16,6 +16,7 @@ class CallNotificationReceiver : BroadcastReceiver() {
             .orEmpty()
             .ifBlank { "Pulse" }
         val peerAvatarUrl = intent.getStringExtra(MainActivity.EXTRA_PEER_AVATAR_URL).orEmpty()
+        val callType = if (intent.getStringExtra(MainActivity.EXTRA_CALL_TYPE) == "video") "video" else "audio"
 
         if (callId.isNotBlank()) {
             IncomingCallAlert.stop(context, callId)
@@ -48,6 +49,7 @@ class CallNotificationReceiver : BroadcastReceiver() {
                     peerUserId = peerUserId,
                     peerName = peerName,
                     peerAvatarUrl = peerAvatarUrl,
+                    callType = callType,
                 )
             }
 
@@ -59,6 +61,7 @@ class CallNotificationReceiver : BroadcastReceiver() {
                     peerUserId = peerUserId,
                     peerName = peerName,
                     peerAvatarUrl = peerAvatarUrl,
+                    callType = callType,
                 )
             }
         }
@@ -71,6 +74,7 @@ class CallNotificationReceiver : BroadcastReceiver() {
         peerUserId: Long,
         peerName: String,
         peerAvatarUrl: String,
+        callType: String,
     ) {
         val openIntent = Intent(context, MainActivity::class.java).apply {
             this.action = action
@@ -82,6 +86,7 @@ class CallNotificationReceiver : BroadcastReceiver() {
             putExtra(MainActivity.EXTRA_PEER_USER_ID, peerUserId)
             putExtra(MainActivity.EXTRA_PEER_NAME, peerName)
             putExtra(MainActivity.EXTRA_PEER_AVATAR_URL, peerAvatarUrl)
+            putExtra(MainActivity.EXTRA_CALL_TYPE, if (callType == "video") "video" else "audio")
         }
 
         context.startActivity(openIntent)
