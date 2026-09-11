@@ -365,6 +365,40 @@ fun PulseAndroidApp() {
         activeCall = call.copy(statusText = status, connectedAtMillis = connectedAt)
     }
 
+    fun restartCallAsOriginalCaller(call: CallUiState) {
+        if (!realtimeSocketManager.isConnected()) {
+            updateActiveCallStatus("Нет соединения с сервером. Ожидаем сеть...")
+            return
+        }
+
+        callManager.restartAsCaller { offer ->
+            realtimeSocketManager.emitCallOffer(
+                callId = call.callId,
+                targetUserId = call.peerUserId,
+                sdp = offer,
+                iceRestart = true,
+            )
+        }
+    }
+
+    fun requestActiveCallRecovery() {
+        val call = activeCall ?: return
+
+        if (!realtimeSocketManager.isConnected()) {
+            updateActiveCallStatus("Нет соединения с сервером. Ожидаем сеть...")
+            return
+        }
+
+        if (call.incoming) {
+            // Callee does not create competing offers. Ask the server to make
+            // the original caller perform the ICE restart.
+            updateActiveCallStatus("Восстанавливаем соединение...")
+            realtimeSocketManager.emitCallRestartRequest(call.callId, call.peerUserId)
+        } else {
+            restartCallAsOriginalCaller(call)
+        }
+    }
+
     fun openCallDialog(call: CallUiState) {
         selectedRoom?.id?.let { realtimeSocketManager.emitTypingUpdate("room", it, false) }
         selectedRoom = null
@@ -836,9 +870,24 @@ fun PulseAndroidApp() {
     }
 
     DisposableEffect(realtimeSocketManager, roomChatViewModel, chatViewModel, dialogsViewModel, roomsViewModel, invitationsViewModel) {
+        callManager.onRecoveryNeeded = {
+            scope.launch {
+                requestActiveCallRecovery()
+            }
+        }
+
         realtimeSocketManager.setOnConnectionStateChanged { connected ->
             scope.launch {
                 realtimeConnected = connected
+
+                if (connected) {
+                    // Socket.IO can reconnect while the WebRTC media session is
+                    // still alive or recovering. Rebind this device to the
+                    // server-side call and let the server replay/restart SDP.
+                    activeCall?.let { call ->
+                        realtimeSocketManager.emitCallResume(call.callId, call.peerUserId)
+                    }
+                }
             }
         }
         realtimeSocketManager.setOnConnectionError { message ->
@@ -1048,8 +1097,17 @@ fun PulseAndroidApp() {
                 callManager.onStatusChanged = { status ->
                     updateActiveCallStatus(status)
                 }
-                callManager.startAsCallee(offer) { answer ->
+
+                val sendAnswer: (String) -> Unit = { answer ->
                     realtimeSocketManager.emitCallAnswer(call.callId, call.peerUserId, answer)
+                }
+
+                if (callManager.hasPeerConnection()) {
+                    // ICE restart and call:resume replay must renegotiate the
+                    // existing call instead of destroying the audio session.
+                    callManager.handleRemoteOffer(offer, sendAnswer)
+                } else {
+                    callManager.startAsCallee(offer, sendAnswer)
                 }
             }
         }
@@ -1078,6 +1136,27 @@ fun PulseAndroidApp() {
                         candidate = payload.optString("candidate"),
                     )
                 )
+            }
+        }
+
+        realtimeSocketManager.setOnCallRestartRequest { payload ->
+            scope.launch {
+                val call = activeCall ?: return@launch
+                if (payload.optString("callId") != call.callId) return@launch
+
+                // The original caller is the only offerer. This avoids SDP
+                // glare when both devices notice the same network failure.
+                if (!call.incoming) {
+                    restartCallAsOriginalCaller(call)
+                }
+            }
+        }
+
+        realtimeSocketManager.setOnCallResumed { payload ->
+            scope.launch {
+                val call = activeCall ?: return@launch
+                if (payload.optString("callId") != call.callId) return@launch
+                Log.d("WEBRTC_CALL", "call resumed after socket reconnect callId=${call.callId}")
             }
         }
 
@@ -1167,8 +1246,11 @@ fun PulseAndroidApp() {
             realtimeSocketManager.setOnCallOffer(null)
             realtimeSocketManager.setOnCallAnswer(null)
             realtimeSocketManager.setOnCallIce(null)
+            realtimeSocketManager.setOnCallRestartRequest(null)
+            realtimeSocketManager.setOnCallResumed(null)
             realtimeSocketManager.setOnCallEnded(null)
             realtimeSocketManager.setOnCallError(null)
+            callManager.onRecoveryNeeded = null
         }
     }
 

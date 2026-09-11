@@ -29,6 +29,8 @@ class RealtimeSocketManager(
     private var onCallOffer: ((JSONObject) -> Unit)? = null
     private var onCallAnswer: ((JSONObject) -> Unit)? = null
     private var onCallIce: ((JSONObject) -> Unit)? = null
+    private var onCallRestartRequest: ((JSONObject) -> Unit)? = null
+    private var onCallResumed: ((JSONObject) -> Unit)? = null
     private var onCallEnded: ((JSONObject) -> Unit)? = null
     private var onCallError: ((JSONObject) -> Unit)? = null
 
@@ -218,6 +220,14 @@ class RealtimeSocketManager(
 
                     onCallIce?.invoke(payload)
                 }
+                on("call:restart-request") { args ->
+                    val payload = args.firstOrNull() as? JSONObject ?: return@on
+                    onCallRestartRequest?.invoke(payload)
+                }
+                on("call:resumed") { args ->
+                    val payload = args.firstOrNull() as? JSONObject ?: return@on
+                    onCallResumed?.invoke(payload)
+                }
                 on("call:ended") { args ->
                     val payload = args.firstOrNull() as? JSONObject ?: return@on
                     onCallEnded?.invoke(payload)
@@ -347,6 +357,14 @@ class RealtimeSocketManager(
         onCallIce = listener
     }
 
+    fun setOnCallRestartRequest(listener: ((JSONObject) -> Unit)?) {
+        onCallRestartRequest = listener
+    }
+
+    fun setOnCallResumed(listener: ((JSONObject) -> Unit)?) {
+        onCallResumed = listener
+    }
+
     fun setOnCallEnded(listener: ((JSONObject) -> Unit)?) {
         onCallEnded = listener
     }
@@ -382,8 +400,29 @@ class RealtimeSocketManager(
         emitCallControl("call:end", callId, targetUserId)
     }
 
-    fun emitCallOffer(callId: String, targetUserId: Long, sdp: String) {
-        emitCallSdp("call:offer", callId, targetUserId, sdp)
+    fun emitCallResume(callId: String, targetUserId: Long) {
+        emitCallControl("call:resume", callId, targetUserId)
+    }
+
+    fun emitCallRestartRequest(callId: String, targetUserId: Long) {
+        emitCallControl("call:restart-request", callId, targetUserId)
+    }
+
+    fun emitCallOffer(
+        callId: String,
+        targetUserId: Long,
+        sdp: String,
+        iceRestart: Boolean = false,
+    ) {
+        if (callId.isBlank() || targetUserId <= 0L || sdp.isBlank()) return
+        socket?.emit(
+            "call:offer",
+            JSONObject()
+                .put("callId", callId)
+                .put("targetUserId", targetUserId)
+                .put("sdp", sdp)
+                .put("iceRestart", iceRestart)
+        )
     }
 
     fun emitCallAnswer(callId: String, targetUserId: Long, sdp: String) {

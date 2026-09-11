@@ -26,7 +26,7 @@ class WebRtcCallManager(
 ) {
     companion object {
         private const val TAG = "WEBRTC_CALL"
-        private const val VERSION = "webrtc-v4-sdp-ice-2026-07-22"
+        private const val VERSION = "webrtc-v5-recovery-2026-09-11"
     }
 
     private val initialized = AtomicBoolean(false)
@@ -44,9 +44,15 @@ class WebRtcCallManager(
     @Volatile
     private var lastIceConnectionState: PeerConnection.IceConnectionState? = null
     private var disconnectWarningTask: Runnable? = null
+    private var restartOfferInFlight = false
+    private var lastRecoveryRequestAt = 0L
+    private var lastRemoteOfferSdp = ""
+    private var lastLocalAnswerSdp = ""
+    private var lastRemoteAnswerSdp = ""
 
     var onIceCandidate: ((CallIcePayload) -> Unit)? = null
     var onStatusChanged: ((String) -> Unit)? = null
+    var onRecoveryNeeded: (() -> Unit)? = null
 
     fun startAsCaller(
         onLocalOffer: (String) -> Unit,
@@ -99,30 +105,131 @@ class WebRtcCallManager(
         preparePeerConnection(addLocalAudio = false)
         onStatusChanged?.invoke("Принимаем звонок...")
 
+        handleRemoteOffer(remoteOffer, onLocalAnswer)
+    }
+
+    fun handleRemoteOffer(
+        remoteOffer: String,
+        onLocalAnswer: (String) -> Unit,
+    ) {
+        val pc = peerConnection
+        if (pc == null) {
+            onStatusChanged?.invoke("Нет активного PeerConnection")
+            return
+        }
+
         val safeOffer = normalizeRemoteSdp(remoteOffer)
 
         android.util.Log.d(
-            "WEBRTC_CALL",
+            TAG,
             "remote offer length=${safeOffer.length} hasAudio=${safeOffer.contains("m=audio")} hasExtmapMixed=${safeOffer.contains("a=extmap-allow-mixed")} start=${safeOffer.take(160)}"
         )
 
         if (!safeOffer.trimStart().startsWith("v=0")) {
-            android.util.Log.e("WEBRTC_CALL", "invalid remote offer: ${safeOffer.take(240)}")
+            android.util.Log.e(TAG, "invalid remote offer: ${safeOffer.take(240)}")
             onStatusChanged?.invoke("Ошибка remote offer: invalid SDP")
             return
         }
 
         if (!safeOffer.contains("m=audio")) {
-            android.util.Log.e("WEBRTC_CALL", "remote offer has no audio m-line: ${safeOffer.take(500)}")
+            android.util.Log.e(TAG, "remote offer has no audio m-line: ${safeOffer.take(500)}")
             onStatusChanged?.invoke("Ошибка remote offer: no audio")
             return
         }
+
+        // call:resume can replay an offer whose answer was lost in transit.
+        // If this exact offer was already answered and the PC is stable,
+        // resend the cached answer instead of rebuilding the whole connection.
+        if (
+            safeOffer == lastRemoteOfferSdp &&
+            lastLocalAnswerSdp.isNotBlank() &&
+            pc.signalingState() == PeerConnection.SignalingState.STABLE
+        ) {
+            android.util.Log.d(TAG, "duplicate remote offer -> replay cached answer")
+            onLocalAnswer(lastLocalAnswerSdp)
+            return
+        }
+
+        onStatusChanged?.invoke("Восстанавливаем соединение...")
+        // New ICE candidates belong to this offer. Queue any candidates that
+        // arrive before setRemoteDescription completes instead of applying
+        // them against the previous ICE generation.
+        remoteDescriptionSet = false
 
         setRemoteOfferInternal(
             sdp = safeOffer,
             onLocalAnswer = onLocalAnswer,
             retried = false,
         )
+    }
+
+    fun hasPeerConnection(): Boolean = peerConnection != null
+
+    fun isMediaConnected(): Boolean =
+        lastIceConnectionState == PeerConnection.IceConnectionState.CONNECTED ||
+            lastIceConnectionState == PeerConnection.IceConnectionState.COMPLETED
+
+    fun restartAsCaller(
+        onLocalOffer: (String) -> Unit,
+    ) {
+        val pc = peerConnection
+        if (pc == null || restartOfferInFlight) {
+            return
+        }
+
+        if (pc.signalingState() != PeerConnection.SignalingState.STABLE) {
+            android.util.Log.d(TAG, "ICE restart deferred signaling=${pc.signalingState()}")
+            connectionHandler.postDelayed(
+                {
+                    if (
+                        peerConnection === pc &&
+                        lastIceConnectionState != PeerConnection.IceConnectionState.CLOSED
+                    ) {
+                        restartAsCaller(onLocalOffer)
+                    }
+                },
+                750L,
+            )
+            return
+        }
+
+        restartOfferInFlight = true
+        onStatusChanged?.invoke("Восстанавливаем соединение...")
+
+        val constraints = MediaConstraints().apply {
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+            mandatory.add(MediaConstraints.KeyValuePair("IceRestart", "true"))
+        }
+
+        pc.createOffer(object : SimpleSdpObserver() {
+            override fun onCreateSuccess(description: SessionDescription) {
+                val safeSdp = normalizeLocalSdp(description.description)
+                val safeDescription = SessionDescription(SessionDescription.Type.OFFER, safeSdp)
+
+                pc.setLocalDescription(object : SimpleSdpObserver() {
+                    override fun onSetSuccess() {
+                        restartOfferInFlight = false
+                        remoteDescriptionSet = false
+                        pendingRemoteIce.clear()
+                        android.util.Log.d(TAG, "ICE restart offer created length=${safeSdp.length}")
+                        onLocalOffer(safeSdp)
+                    }
+
+                    override fun onSetFailure(error: String?) {
+                        restartOfferInFlight = false
+                        android.util.Log.e(TAG, "setLocalDescription ICE restart failed: $error")
+                        onStatusChanged?.invoke("Не удалось восстановить соединение")
+                    }
+                }, safeDescription)
+            }
+
+            override fun onCreateFailure(error: String?) {
+                restartOfferInFlight = false
+                android.util.Log.e(TAG, "create ICE restart offer failed: $error")
+                onStatusChanged?.invoke("Не удалось восстановить соединение")
+            }
+        }, constraints)
     }
 
     private fun setRemoteOfferInternal(
@@ -135,7 +242,8 @@ class WebRtcCallManager(
         peerConnection?.setRemoteDescription(object : SimpleSdpObserver() {
             override fun onSetSuccess() {
                 remoteDescriptionSet = true
-                android.util.Log.d("WEBRTC_CALL", "remote offer set successfully")
+                lastRemoteOfferSdp = sdp
+                android.util.Log.d(TAG, "remote offer set successfully")
 
                 ensureLocalAudioTrack()
                 flushPendingRemoteIce()
@@ -157,6 +265,7 @@ class WebRtcCallManager(
 
                         peerConnection?.setLocalDescription(object : SimpleSdpObserver() {
                             override fun onSetSuccess() {
+                                lastLocalAnswerSdp = safeSdp
                                 onLocalAnswer(safeSdp)
                             }
 
@@ -218,16 +327,29 @@ class WebRtcCallManager(
             return
         }
 
+        val pc = peerConnection ?: return
+
+        if (
+            safeAnswer == lastRemoteAnswerSdp &&
+            pc.signalingState() == PeerConnection.SignalingState.STABLE
+        ) {
+            android.util.Log.d(TAG, "duplicate remote answer ignored")
+            onStatusChanged?.invoke("Звонок активен")
+            return
+        }
+
         val remoteDescription = SessionDescription(SessionDescription.Type.ANSWER, safeAnswer)
-        peerConnection?.setRemoteDescription(object : SimpleSdpObserver() {
+        pc.setRemoteDescription(object : SimpleSdpObserver() {
             override fun onSetSuccess() {
                 remoteDescriptionSet = true
+                lastRemoteAnswerSdp = safeAnswer
+                restartOfferInFlight = false
                 flushPendingRemoteIce()
                 onStatusChanged?.invoke("Звонок активен")
             }
 
             override fun onSetFailure(error: String?) {
-                android.util.Log.e("WEBRTC_CALL", "setRemoteDescription answer failed: $error")
+                android.util.Log.e(TAG, "setRemoteDescription answer failed: $error")
                 onStatusChanged?.invoke("Ошибка remote answer: ${error ?: "unknown"}")
             }
         }, remoteDescription)
@@ -271,11 +393,21 @@ class WebRtcCallManager(
         val task = Runnable {
             disconnectWarningTask = null
             if (lastIceConnectionState == PeerConnection.IceConnectionState.DISCONNECTED) {
-                onStatusChanged?.invoke("Соединение потеряно, восстанавливаем...")
+                requestRecovery()
             }
         }
         disconnectWarningTask = task
         connectionHandler.postDelayed(task, 2_500L)
+    }
+
+    private fun requestRecovery() {
+        val now = System.currentTimeMillis()
+        if (now - lastRecoveryRequestAt < 1_500L) {
+            return
+        }
+        lastRecoveryRequestAt = now
+        onStatusChanged?.invoke("Соединение потеряно, восстанавливаем...")
+        onRecoveryNeeded?.invoke()
     }
 
     fun end() {
@@ -300,6 +432,11 @@ class WebRtcCallManager(
 
         pendingRemoteIce.clear()
         remoteDescriptionSet = false
+        restartOfferInFlight = false
+        lastRecoveryRequestAt = 0L
+        lastRemoteOfferSdp = ""
+        lastLocalAnswerSdp = ""
+        lastRemoteAnswerSdp = ""
         onStatusChanged?.invoke("Звонок завершён")
     }
 
@@ -363,6 +500,7 @@ class WebRtcCallManager(
                         PeerConnection.IceConnectionState.CONNECTED,
                         PeerConnection.IceConnectionState.COMPLETED -> {
                             cancelDisconnectWarning()
+                            restartOfferInFlight = false
                             onStatusChanged?.invoke("Звонок активен")
                         }
                         PeerConnection.IceConnectionState.DISCONNECTED -> {
@@ -373,7 +511,7 @@ class WebRtcCallManager(
                         }
                         PeerConnection.IceConnectionState.FAILED -> {
                             cancelDisconnectWarning()
-                            onStatusChanged?.invoke("Не удалось соединиться. Можно подождать или завершить звонок")
+                            requestRecovery()
                         }
                         PeerConnection.IceConnectionState.CLOSED -> {
                             cancelDisconnectWarning()
@@ -475,6 +613,11 @@ class WebRtcCallManager(
         peerConnection = null
         remoteDescriptionSet = false
         pendingRemoteIce.clear()
+        restartOfferInFlight = false
+        lastRecoveryRequestAt = 0L
+        lastRemoteOfferSdp = ""
+        lastLocalAnswerSdp = ""
+        lastRemoteAnswerSdp = ""
 
         runCatching {
             audioTrack?.dispose()
