@@ -408,6 +408,18 @@ class RealtimeSocketManager(
         emitCallControl("call:restart-request", callId, targetUserId)
     }
 
+    fun emitCallDiagnostic(callId: String, targetUserId: Long, event: String, details: String = "") {
+        if (callId.isBlank() || targetUserId <= 0L || event.isBlank()) return
+        socket?.emit(
+            "call:diagnostic",
+            JSONObject()
+                .put("callId", callId)
+                .put("targetUserId", targetUserId)
+                .put("event", event.take(80))
+                .put("details", details.take(1000))
+        )
+    }
+
     fun emitCallOffer(
         callId: String,
         targetUserId: Long,

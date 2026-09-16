@@ -2,6 +2,8 @@ package com.pulsemessenger.android.core.call
 
 import android.content.Context
 import android.media.AudioManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Handler
 import android.os.Looper
 import org.webrtc.AudioSource
@@ -77,6 +79,7 @@ class WebRtcCallManager(
     )
 
     var onIceCandidate: ((CallIcePayload) -> Unit)? = null
+    var onDiagnostic: ((String, String) -> Unit)? = null
     var onStatusChanged: ((String) -> Unit)? = null
     var onRecoveryNeeded: (() -> Unit)? = null
 
@@ -554,6 +557,31 @@ class WebRtcCallManager(
         onStatusChanged?.invoke("Звонок завершён")
     }
 
+    private fun networkSnapshot(): String {
+        return try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return "network=unknown"
+            val network = cm.activeNetwork ?: return "network=none"
+            val caps = cm.getNetworkCapabilities(network) ?: return "network=unknown"
+            val type = when {
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WIFI"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "CELLULAR"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "VPN"
+                else -> "OTHER"
+            }
+            "network=$type validated=${caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)}"
+        } catch (_: Exception) {
+            "network=error"
+        }
+    }
+
+    private fun diagnostic(event: String, details: String = "") {
+        val text = listOf(details, networkSnapshot()).filter { it.isNotBlank() }.joinToString(" ")
+        android.util.Log.d("WEBRTC_DIAG", "$event $text")
+        onDiagnostic?.invoke(event, text)
+    }
+
     fun updateIceServers(servers: List<PeerConnection.IceServer>) {
         if (servers.isEmpty()) return
         configuredIceServers = servers
@@ -582,12 +610,14 @@ class WebRtcCallManager(
             object : PeerConnection.Observer {
                 override fun onSignalingChange(state: PeerConnection.SignalingState?) {
                     android.util.Log.d("WEBRTC_CALL", "signaling=$state")
+                    diagnostic("SIGNALING_STATE", "state=$state")
                 }
 
                 override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
 
                 override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {
                     android.util.Log.d("WEBRTC_CALL", "iceGathering=$state")
+                    diagnostic("ICE_GATHERING", "state=$state")
                 }
 
                 override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) = Unit
@@ -605,6 +635,7 @@ class WebRtcCallManager(
                 override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
                     android.util.Log.d("WEBRTC_CALL", "iceConnection=$state")
                     lastIceConnectionState = state
+                    diagnostic("ICE_CONNECTION", "state=$state")
 
                     when (state) {
                         PeerConnection.IceConnectionState.CHECKING -> {
@@ -643,6 +674,10 @@ class WebRtcCallManager(
                         "WEBRTC_CALL",
                         "local ICE mid=${candidate.sdpMid} index=${candidate.sdpMLineIndex}"
                     )
+                    val candidateText = candidate.sdp
+                    val candidateType = Regex(" typ ([^ ]+)").find(candidateText)?.groupValues?.getOrNull(1) ?: "unknown"
+                    val protocol = candidateText.split(" ").getOrNull(2) ?: "unknown"
+                    diagnostic("LOCAL_CANDIDATE", "type=$candidateType protocol=$protocol")
 
                     onIceCandidate?.invoke(
                         CallIcePayload(

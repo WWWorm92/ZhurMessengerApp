@@ -287,6 +287,21 @@ fun PulseAndroidApp() {
     var callElapsedSeconds by remember { mutableStateOf(0) }
     var callNegotiationId by remember { mutableStateOf("") }
 
+    DisposableEffect(callManager, realtimeSocketManager) {
+        callManager.onDiagnostic = { event, details ->
+            val call = activeCall
+            if (call != null) {
+                realtimeSocketManager.emitCallDiagnostic(
+                    callId = call.callId,
+                    targetUserId = call.peerUserId,
+                    event = event,
+                    details = details,
+                )
+            }
+        }
+        onDispose { callManager.onDiagnostic = null }
+    }
+
     fun hasMicPermission(): Boolean {
         return ContextCompat.checkSelfPermission(
             context,
@@ -361,8 +376,17 @@ fun PulseAndroidApp() {
 
     fun updateActiveCallStatus(status: String) {
         val call = activeCall ?: return
-        val becameActive = status.contains("актив", ignoreCase = true)
+        val mediaConnected = callManager.isMediaConnected()
+        val reportedActive = status.contains("актив", ignoreCase = true)
         val connectionProblem = isConnectionProblemStatus(status)
+
+        // During call:resume / ICE restart the callee can receive a temporary
+        // "Восстанавливаем..." status while the existing PeerConnection is still
+        // CONNECTED. In that case WebRTC may not emit CONNECTED a second time,
+        // so a connection-lost tone started here would otherwise loop forever.
+        // Treat the actual ICE media state as authoritative.
+        val becameActive = reportedActive || (connectionProblem && mediaConnected)
+        val effectiveStatus = if (becameActive && mediaConnected) "Звонок активен" else status
 
         when {
             becameActive -> {
@@ -383,7 +407,7 @@ fun PulseAndroidApp() {
         } else {
             call.connectedAtMillis
         }
-        activeCall = call.copy(statusText = status, connectedAtMillis = connectedAt)
+        activeCall = call.copy(statusText = effectiveStatus, connectedAtMillis = connectedAt)
     }
 
     fun restartCallAsOriginalCaller(call: CallUiState) {
