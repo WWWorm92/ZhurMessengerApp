@@ -3,6 +3,7 @@ package com.pulsemessenger.android.core.call
 import android.content.Context
 import android.media.AudioManager
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Handler
 import android.os.Looper
@@ -40,7 +41,10 @@ class WebRtcCallManager(
 ) {
     companion object {
         private const val TAG = "WEBRTC_CALL"
-        private const val VERSION = "webrtc-v7-video-2026-09-11"
+        private const val VERSION = "webrtc-v8-network-handover-2026-09-16"
+        private const val NETWORK_SETTLE_DELAY_MS = 400L
+        private const val RECOVERY_RETRY_DELAY_MS = 2_000L
+        private const val MAX_RECOVERY_ATTEMPTS = 3
     }
 
     private val initialized = AtomicBoolean(false)
@@ -68,8 +72,31 @@ class WebRtcCallManager(
     @Volatile
     private var lastIceConnectionState: PeerConnection.IceConnectionState? = null
     private var disconnectWarningTask: Runnable? = null
+    private var recoveryDispatchTask: Runnable? = null
+    private var recoveryRetryTask: Runnable? = null
     private var restartOfferInFlight = false
     private var lastRecoveryRequestAt = 0L
+    private var recoveryPending = false
+    private var recoveryAttempt = 0
+    private var lastNetworkSignature = ""
+    private var lastNetworkChangeAt = 0L
+    private var networkCallbackRegistered = false
+    private val connectivityManager: ConnectivityManager? by lazy {
+        context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+    }
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            handleDefaultNetworkChanged("available")
+        }
+
+        override fun onLost(network: Network) {
+            handleDefaultNetworkChanged("lost")
+        }
+
+        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+            handleDefaultNetworkChanged("capabilities")
+        }
+    }
     private var lastRemoteOfferSdp = ""
     private var lastLocalAnswerSdp = ""
     private var lastRemoteAnswerSdp = ""
@@ -513,17 +540,158 @@ class WebRtcCallManager(
     }
 
     private fun requestRecovery() {
+        if (isMediaConnected()) return
+
+        recoveryPending = true
+        onStatusChanged?.invoke("Соединение потеряно, ожидаем новую сеть...")
+        scheduleRecoveryWhenNetworkStable()
+    }
+
+    private fun scheduleRecoveryWhenNetworkStable() {
+        recoveryDispatchTask?.let(connectionHandler::removeCallbacks)
+
         val now = System.currentTimeMillis()
-        if (now - lastRecoveryRequestAt < 1_500L) {
+        val snapshot = currentNetworkState()
+        if (!snapshot.validated) {
+            diagnostic("RECOVERY_WAIT_NETWORK", "reason=not_validated type=${snapshot.type}")
+            val task = Runnable {
+                recoveryDispatchTask = null
+                if (recoveryPending && !isMediaConnected()) {
+                    scheduleRecoveryWhenNetworkStable()
+                }
+            }
+            recoveryDispatchTask = task
+            connectionHandler.postDelayed(task, 1_000L)
             return
         }
-        lastRecoveryRequestAt = now
-        onStatusChanged?.invoke("Соединение потеряно, восстанавливаем...")
-        onRecoveryNeeded?.invoke()
+
+        // Android may already report CELLULAR while libwebrtc's internal network
+        // monitor still has the old Wi-Fi interface. Give it time to observe the
+        // new default network before creating an ICE-restart offer.
+        val sinceNetworkChange = now - lastNetworkChangeAt
+        val delay = if (lastNetworkChangeAt == 0L) {
+            NETWORK_SETTLE_DELAY_MS
+        } else {
+            (NETWORK_SETTLE_DELAY_MS - sinceNetworkChange).coerceAtLeast(350L)
+        }
+
+        diagnostic(
+            "RECOVERY_SCHEDULED",
+            "delayMs=$delay type=${snapshot.type} attempt=${recoveryAttempt + 1}",
+        )
+
+        val task = Runnable {
+            recoveryDispatchTask = null
+            if (!recoveryPending || isMediaConnected()) return@Runnable
+
+            val ready = currentNetworkState()
+            if (!ready.validated) {
+                scheduleRecoveryWhenNetworkStable()
+                return@Runnable
+            }
+
+            val nowRun = System.currentTimeMillis()
+            if (nowRun - lastRecoveryRequestAt < 1_500L) {
+                scheduleRecoveryWhenNetworkStable()
+                return@Runnable
+            }
+
+            lastRecoveryRequestAt = nowRun
+            recoveryPending = false
+            recoveryAttempt += 1
+            diagnostic("RECOVERY_TRIGGERED", "type=${ready.type} attempt=$recoveryAttempt")
+            onStatusChanged?.invoke("Восстанавливаем соединение...")
+            onRecoveryNeeded?.invoke()
+            scheduleRecoveryRetry()
+        }
+        recoveryDispatchTask = task
+        connectionHandler.postDelayed(task, delay)
+    }
+
+    private fun scheduleRecoveryRetry() {
+        recoveryRetryTask?.let(connectionHandler::removeCallbacks)
+        if (recoveryAttempt >= MAX_RECOVERY_ATTEMPTS) return
+
+        val task = Runnable {
+            recoveryRetryTask = null
+            if (isMediaConnected() || peerConnection == null) return@Runnable
+            diagnostic("RECOVERY_RETRY", "nextAttempt=${recoveryAttempt + 1}")
+            recoveryPending = true
+            scheduleRecoveryWhenNetworkStable()
+        }
+        recoveryRetryTask = task
+        connectionHandler.postDelayed(task, RECOVERY_RETRY_DELAY_MS)
+    }
+
+    private data class NetworkState(val type: String, val validated: Boolean)
+
+    private fun currentNetworkState(): NetworkState {
+        return try {
+            val cm = connectivityManager ?: return NetworkState("unknown", false)
+            val network = cm.activeNetwork ?: return NetworkState("none", false)
+            val caps = cm.getNetworkCapabilities(network) ?: return NetworkState("unknown", false)
+            val type = when {
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WIFI"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "CELLULAR"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "VPN"
+                else -> "OTHER"
+            }
+            NetworkState(type, caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED))
+        } catch (_: Exception) {
+            NetworkState("error", false)
+        }
+    }
+
+    private fun handleDefaultNetworkChanged(source: String) {
+        connectionHandler.post {
+            val state = currentNetworkState()
+            val signature = "${state.type}:${state.validated}"
+            if (signature == lastNetworkSignature) return@post
+
+            val previous = lastNetworkSignature.ifBlank { "unknown" }
+            lastNetworkSignature = signature
+            lastNetworkChangeAt = System.currentTimeMillis()
+            diagnostic(
+                "NETWORK_CHANGE",
+                "source=$source from=$previous to=$signature",
+            )
+
+            if (recoveryPending && state.validated) {
+                scheduleRecoveryWhenNetworkStable()
+            }
+        }
+    }
+
+    private fun startNetworkMonitoring() {
+        if (networkCallbackRegistered) return
+        val cm = connectivityManager ?: return
+        runCatching {
+            cm.registerDefaultNetworkCallback(networkCallback)
+            networkCallbackRegistered = true
+            val state = currentNetworkState()
+            lastNetworkSignature = "${state.type}:${state.validated}"
+            lastNetworkChangeAt = System.currentTimeMillis()
+        }.onFailure {
+            android.util.Log.w(TAG, "default network callback registration failed", it)
+        }
+    }
+
+    private fun stopNetworkMonitoring() {
+        if (!networkCallbackRegistered) return
+        runCatching { connectivityManager?.unregisterNetworkCallback(networkCallback) }
+        networkCallbackRegistered = false
     }
 
     fun end() {
         cancelDisconnectWarning()
+        recoveryDispatchTask?.let(connectionHandler::removeCallbacks)
+        recoveryDispatchTask = null
+        recoveryRetryTask?.let(connectionHandler::removeCallbacks)
+        recoveryRetryTask = null
+        recoveryPending = false
+        recoveryAttempt = 0
+        stopNetworkMonitoring()
         lastIceConnectionState = null
         runCatching {
             peerConnection?.close()
@@ -558,22 +726,8 @@ class WebRtcCallManager(
     }
 
     private fun networkSnapshot(): String {
-        return try {
-            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-                ?: return "network=unknown"
-            val network = cm.activeNetwork ?: return "network=none"
-            val caps = cm.getNetworkCapabilities(network) ?: return "network=unknown"
-            val type = when {
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WIFI"
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "CELLULAR"
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "VPN"
-                else -> "OTHER"
-            }
-            "network=$type validated=${caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)}"
-        } catch (_: Exception) {
-            "network=error"
-        }
+        val state = currentNetworkState()
+        return "network=${state.type} validated=${state.validated}"
     }
 
     private fun diagnostic(event: String, details: String = "") {
@@ -596,6 +750,7 @@ class WebRtcCallManager(
 
     private fun preparePeerConnection(addLocalAudio: Boolean, addLocalVideo: Boolean) {
         ensureFactory()
+        startNetworkMonitoring()
 
         audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         audioManager?.mode = AudioManager.MODE_IN_COMMUNICATION
@@ -646,6 +801,12 @@ class WebRtcCallManager(
                         PeerConnection.IceConnectionState.CONNECTED,
                         PeerConnection.IceConnectionState.COMPLETED -> {
                             cancelDisconnectWarning()
+                            recoveryDispatchTask?.let(connectionHandler::removeCallbacks)
+                            recoveryDispatchTask = null
+                            recoveryRetryTask?.let(connectionHandler::removeCallbacks)
+                            recoveryRetryTask = null
+                            recoveryPending = false
+                            recoveryAttempt = 0
                             restartOfferInFlight = false
                             onStatusChanged?.invoke("Звонок активен")
                         }
@@ -843,6 +1004,12 @@ class WebRtcCallManager(
 
     private fun resetPeerConnectionOnly() {
         cancelDisconnectWarning()
+        recoveryDispatchTask?.let(connectionHandler::removeCallbacks)
+        recoveryDispatchTask = null
+        recoveryRetryTask?.let(connectionHandler::removeCallbacks)
+        recoveryRetryTask = null
+        recoveryPending = false
+        recoveryAttempt = 0
         lastIceConnectionState = null
         runCatching {
             peerConnection?.close()
