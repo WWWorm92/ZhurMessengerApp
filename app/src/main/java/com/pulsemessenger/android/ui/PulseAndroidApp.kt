@@ -416,22 +416,23 @@ fun PulseAndroidApp() {
             return
         }
 
-        scope.launch {
-            val iceServers = callIceConfigRepository.load(force = true)
-            callManager.updateIceServers(iceServers)
+        // Do not reload ICE config from the server before an ICE restart.
+        // During a network handover that HTTP request can take several seconds;
+        // meanwhile the recovery timer fires again and we get several
+        // RECOVERY_TRIGGERED events without an actual ICE_RESTART_OFFER.
+        // The active PeerConnection already has the ICE servers that were loaded
+        // when this call was established, so restart immediately.
+        val negotiationId = UUID.randomUUID().toString()
+        callNegotiationId = negotiationId
 
-            val negotiationId = UUID.randomUUID().toString()
-            callNegotiationId = negotiationId
-
-            callManager.restartAsCaller { offer ->
-                realtimeSocketManager.emitCallOffer(
-                    callId = call.callId,
-                    targetUserId = call.peerUserId,
-                    sdp = offer,
-                    iceRestart = true,
-                    negotiationId = negotiationId,
-                )
-            }
+        callManager.restartAsCaller { offer ->
+            realtimeSocketManager.emitCallOffer(
+                callId = call.callId,
+                targetUserId = call.peerUserId,
+                sdp = offer,
+                iceRestart = true,
+                negotiationId = negotiationId,
+            )
         }
     }
 
@@ -1168,9 +1169,12 @@ fun PulseAndroidApp() {
                     callNegotiationId = incomingNegotiationId
                 }
 
-                callManager.updateIceServers(
-                    callIceConfigRepository.load(force = payload.optBoolean("iceRestart", false))
-                )
+                // Never block an active ICE restart on an HTTP refresh of TURN config.
+                // The existing PeerConnection already has working ICE servers; waiting here
+                // can let candidates for the new ICE generation arrive against the old SDP.
+                if (!callManager.hasPeerConnection()) {
+                    callManager.updateIceServers(callIceConfigRepository.load(force = false))
+                }
 
                 callManager.onIceCandidate = { ice ->
                     realtimeSocketManager.emitCallIce(

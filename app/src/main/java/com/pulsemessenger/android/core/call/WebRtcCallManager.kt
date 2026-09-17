@@ -41,10 +41,11 @@ class WebRtcCallManager(
 ) {
     companion object {
         private const val TAG = "WEBRTC_CALL"
-        private const val VERSION = "webrtc-v9-default-network-fix-2026-09-16"
+        private const val VERSION = "webrtc-v11-recovery-hardening-2026-09-17"
         private const val NETWORK_SETTLE_DELAY_MS = 400L
-        private const val RECOVERY_RETRY_DELAY_MS = 2_000L
+        private const val RECOVERY_RETRY_DELAY_MS = 4_000L
         private const val MAX_RECOVERY_ATTEMPTS = 3
+        private const val RESTART_OFFER_TIMEOUT_MS = 10_000L
     }
 
     private val initialized = AtomicBoolean(false)
@@ -75,6 +76,7 @@ class WebRtcCallManager(
     private var recoveryDispatchTask: Runnable? = null
     private var recoveryRetryTask: Runnable? = null
     private var restartOfferInFlight = false
+    private var restartOfferTimeoutTask: Runnable? = null
     private var lastRecoveryRequestAt = 0L
     private var recoveryPending = false
     private var recoveryAttempt = 0
@@ -250,11 +252,17 @@ class WebRtcCallManager(
         onLocalOffer: (String) -> Unit,
     ) {
         val pc = peerConnection
-        if (pc == null || restartOfferInFlight) {
+        if (pc == null) {
+            diagnostic("RECOVERY_BLOCKED", "reason=no_peer_connection")
+            return
+        }
+        if (restartOfferInFlight) {
+            diagnostic("RECOVERY_BLOCKED", "reason=offer_in_flight signaling=${pc.signalingState()}")
             return
         }
 
         if (pc.signalingState() != PeerConnection.SignalingState.STABLE) {
+            diagnostic("RECOVERY_BLOCKED", "reason=signaling_${pc.signalingState()}")
             android.util.Log.d(TAG, "ICE restart deferred signaling=${pc.signalingState()}")
             connectionHandler.postDelayed(
                 {
@@ -286,15 +294,30 @@ class WebRtcCallManager(
 
                 pc.setLocalDescription(object : SimpleSdpObserver() {
                     override fun onSetSuccess() {
-                        restartOfferInFlight = false
+                        // Keep restartOfferInFlight=true until the remote answer arrives.
+                        // Otherwise another recovery timer can create a competing offer
+                        // while this ICE restart negotiation is still in progress.
                         remoteDescriptionSet = false
                         pendingRemoteIce.clear()
+                        restartOfferTimeoutTask?.let(connectionHandler::removeCallbacks)
+                        val timeoutTask = Runnable {
+                            restartOfferTimeoutTask = null
+                            if (restartOfferInFlight && peerConnection === pc && !isMediaConnected()) {
+                                restartOfferInFlight = false
+                                diagnostic("RECOVERY_OFFER_TIMEOUT", "signaling=${pc.signalingState()}")
+                                requestRecovery()
+                            }
+                        }
+                        restartOfferTimeoutTask = timeoutTask
+                        connectionHandler.postDelayed(timeoutTask, RESTART_OFFER_TIMEOUT_MS)
                         android.util.Log.d(TAG, "ICE restart offer created length=${safeSdp.length}")
                         onLocalOffer(safeSdp)
                     }
 
                     override fun onSetFailure(error: String?) {
                         restartOfferInFlight = false
+                        restartOfferTimeoutTask?.let(connectionHandler::removeCallbacks)
+                        restartOfferTimeoutTask = null
                         android.util.Log.e(TAG, "setLocalDescription ICE restart failed: $error")
                         onStatusChanged?.invoke("Не удалось восстановить соединение")
                     }
@@ -303,6 +326,8 @@ class WebRtcCallManager(
 
             override fun onCreateFailure(error: String?) {
                 restartOfferInFlight = false
+                restartOfferTimeoutTask?.let(connectionHandler::removeCallbacks)
+                restartOfferTimeoutTask = null
                 android.util.Log.e(TAG, "create ICE restart offer failed: $error")
                 onStatusChanged?.invoke("Не удалось восстановить соединение")
             }
@@ -414,6 +439,8 @@ class WebRtcCallManager(
         if (signalingState == PeerConnection.SignalingState.STABLE) {
             android.util.Log.d(TAG, "stale/duplicate remote answer ignored; signaling=STABLE")
             restartOfferInFlight = false
+            restartOfferTimeoutTask?.let(connectionHandler::removeCallbacks)
+            restartOfferTimeoutTask = null
             return
         }
 
@@ -437,6 +464,8 @@ class WebRtcCallManager(
                 remoteDescriptionSet = true
                 lastRemoteAnswerSdp = safeAnswer
                 restartOfferInFlight = false
+                restartOfferTimeoutTask?.let(connectionHandler::removeCallbacks)
+                restartOfferTimeoutTask = null
                 flushPendingRemoteIce()
                 // The ICE callback is the source of truth for media health.
                 if (isMediaConnected()) {
@@ -628,6 +657,11 @@ class WebRtcCallManager(
         val task = Runnable {
             recoveryRetryTask = null
             if (isMediaConnected() || peerConnection == null) return@Runnable
+            if (restartOfferInFlight) {
+                diagnostic("RECOVERY_RETRY_WAIT", "reason=offer_in_flight")
+                scheduleRecoveryRetry()
+                return@Runnable
+            }
             diagnostic("RECOVERY_RETRY", "nextAttempt=${recoveryAttempt + 1}")
             recoveryPending = true
             scheduleRecoveryWhenNetworkStable()
@@ -728,6 +762,8 @@ class WebRtcCallManager(
         recoveryDispatchTask = null
         recoveryRetryTask?.let(connectionHandler::removeCallbacks)
         recoveryRetryTask = null
+        restartOfferTimeoutTask?.let(connectionHandler::removeCallbacks)
+        restartOfferTimeoutTask = null
         recoveryPending = false
         recoveryAttempt = 0
         stopNetworkMonitoring()
@@ -847,6 +883,8 @@ class WebRtcCallManager(
                             recoveryPending = false
                             recoveryAttempt = 0
                             restartOfferInFlight = false
+                            restartOfferTimeoutTask?.let(connectionHandler::removeCallbacks)
+                            restartOfferTimeoutTask = null
                             onStatusChanged?.invoke("Звонок активен")
                         }
                         PeerConnection.IceConnectionState.DISCONNECTED -> {
@@ -1047,6 +1085,8 @@ class WebRtcCallManager(
         recoveryDispatchTask = null
         recoveryRetryTask?.let(connectionHandler::removeCallbacks)
         recoveryRetryTask = null
+        restartOfferTimeoutTask?.let(connectionHandler::removeCallbacks)
+        restartOfferTimeoutTask = null
         recoveryPending = false
         recoveryAttempt = 0
         lastIceConnectionState = null
