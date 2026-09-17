@@ -41,7 +41,7 @@ class WebRtcCallManager(
 ) {
     companion object {
         private const val TAG = "WEBRTC_CALL"
-        private const val VERSION = "webrtc-v8-network-handover-2026-09-16"
+        private const val VERSION = "webrtc-v9-default-network-fix-2026-09-16"
         private const val NETWORK_SETTLE_DELAY_MS = 400L
         private const val RECOVERY_RETRY_DELAY_MS = 2_000L
         private const val MAX_RECOVERY_ATTEMPTS = 3
@@ -81,20 +81,35 @@ class WebRtcCallManager(
     private var lastNetworkSignature = ""
     private var lastNetworkChangeAt = 0L
     private var networkCallbackRegistered = false
+    @Volatile private var trackedDefaultNetwork: Network? = null
+    @Volatile private var trackedNetworkState = NetworkState("unknown", false)
+    private var lastRecoveryWaitLog = ""
+    private var lastRecoveryWaitLogAt = 0L
     private val connectivityManager: ConnectivityManager? by lazy {
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
     }
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            handleDefaultNetworkChanged("available")
+            val caps = connectivityManager?.getNetworkCapabilities(network)
+            updateTrackedDefaultNetwork("available", network, caps)
         }
 
         override fun onLost(network: Network) {
-            handleDefaultNetworkChanged("lost")
+            // onLost belongs to the Network object that actually disappeared.
+            // Never re-read activeNetwork here: during Wi-Fi -> LTE Android can
+            // temporarily expose stale/default information and make LTE look like Wi-Fi.
+            if (trackedDefaultNetwork == network) {
+                trackedDefaultNetwork = null
+                updateTrackedNetworkState("lost", NetworkState("none", false))
+            }
         }
 
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
-            handleDefaultNetworkChanged("capabilities")
+            // Ignore late capability callbacks from the previous default network.
+            if (trackedDefaultNetwork == null || trackedDefaultNetwork == network) {
+                trackedDefaultNetwork = network
+                updateTrackedNetworkState("capabilities", networkStateFromCapabilities(capabilities))
+            }
         }
     }
     private var lastRemoteOfferSdp = ""
@@ -553,7 +568,7 @@ class WebRtcCallManager(
         val now = System.currentTimeMillis()
         val snapshot = currentNetworkState()
         if (!snapshot.validated) {
-            diagnostic("RECOVERY_WAIT_NETWORK", "reason=not_validated type=${snapshot.type}")
+            logRecoveryWaitOnce("reason=not_validated type=${snapshot.type}")
             val task = Runnable {
                 recoveryDispatchTask = null
                 if (recoveryPending && !isMediaConnected()) {
@@ -569,11 +584,8 @@ class WebRtcCallManager(
         // monitor still has the old Wi-Fi interface. Give it time to observe the
         // new default network before creating an ICE-restart offer.
         val sinceNetworkChange = now - lastNetworkChangeAt
-        val delay = if (lastNetworkChangeAt == 0L) {
-            NETWORK_SETTLE_DELAY_MS
-        } else {
-            (NETWORK_SETTLE_DELAY_MS - sinceNetworkChange).coerceAtLeast(350L)
-        }
+        val delay = (NETWORK_SETTLE_DELAY_MS - sinceNetworkChange).coerceAtLeast(0L)
+        val targetSignature = "${snapshot.type}:${snapshot.validated}"
 
         diagnostic(
             "RECOVERY_SCHEDULED",
@@ -585,7 +597,8 @@ class WebRtcCallManager(
             if (!recoveryPending || isMediaConnected()) return@Runnable
 
             val ready = currentNetworkState()
-            if (!ready.validated) {
+            val readySignature = "${ready.type}:${ready.validated}"
+            if (!ready.validated || readySignature != targetSignature) {
                 scheduleRecoveryWhenNetworkStable()
                 return@Runnable
             }
@@ -625,53 +638,75 @@ class WebRtcCallManager(
 
     private data class NetworkState(val type: String, val validated: Boolean)
 
+    private fun networkStateFromCapabilities(caps: NetworkCapabilities?): NetworkState {
+        if (caps == null) return NetworkState("unknown", false)
+        val type = when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "VPN"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WIFI"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "CELLULAR"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
+            else -> "OTHER"
+        }
+        return NetworkState(type, caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED))
+    }
+
     private fun currentNetworkState(): NetworkState {
         return try {
             val cm = connectivityManager ?: return NetworkState("unknown", false)
-            val network = cm.activeNetwork ?: return NetworkState("none", false)
-            val caps = cm.getNetworkCapabilities(network) ?: return NetworkState("unknown", false)
-            val type = when {
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WIFI"
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "CELLULAR"
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "VPN"
-                else -> "OTHER"
+            val tracked = trackedDefaultNetwork
+            if (networkCallbackRegistered && tracked != null) {
+                val fresh = networkStateFromCapabilities(cm.getNetworkCapabilities(tracked))
+                if (fresh.type != "unknown") {
+                    trackedNetworkState = fresh
+                    return fresh
+                }
+                return trackedNetworkState
             }
-            NetworkState(type, caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED))
+            if (networkCallbackRegistered) return trackedNetworkState
+            val network = cm.activeNetwork ?: return NetworkState("none", false)
+            networkStateFromCapabilities(cm.getNetworkCapabilities(network))
         } catch (_: Exception) {
-            NetworkState("error", false)
+            trackedNetworkState
         }
     }
 
-    private fun handleDefaultNetworkChanged(source: String) {
+    private fun updateTrackedDefaultNetwork(source: String, network: Network, caps: NetworkCapabilities?) {
+        trackedDefaultNetwork = network
+        updateTrackedNetworkState(source, networkStateFromCapabilities(caps))
+    }
+
+    private fun updateTrackedNetworkState(source: String, state: NetworkState) {
+        trackedNetworkState = state
         connectionHandler.post {
-            val state = currentNetworkState()
             val signature = "${state.type}:${state.validated}"
             if (signature == lastNetworkSignature) return@post
-
             val previous = lastNetworkSignature.ifBlank { "unknown" }
             lastNetworkSignature = signature
             lastNetworkChangeAt = System.currentTimeMillis()
-            diagnostic(
-                "NETWORK_CHANGE",
-                "source=$source from=$previous to=$signature",
-            )
-
-            if (recoveryPending && state.validated) {
-                scheduleRecoveryWhenNetworkStable()
-            }
+            diagnostic("NETWORK_CHANGE", "source=$source from=$previous to=$signature")
+            if (recoveryPending && state.validated) scheduleRecoveryWhenNetworkStable()
         }
+    }
+
+    private fun logRecoveryWaitOnce(details: String) {
+        val now = System.currentTimeMillis()
+        if (details == lastRecoveryWaitLog && now - lastRecoveryWaitLogAt < 1_000L) return
+        lastRecoveryWaitLog = details
+        lastRecoveryWaitLogAt = now
+        diagnostic("RECOVERY_WAIT_NETWORK", details)
     }
 
     private fun startNetworkMonitoring() {
         if (networkCallbackRegistered) return
         val cm = connectivityManager ?: return
         runCatching {
+            val initial = cm.activeNetwork
+            trackedDefaultNetwork = initial
+            trackedNetworkState = networkStateFromCapabilities(initial?.let(cm::getNetworkCapabilities))
+            lastNetworkSignature = "${trackedNetworkState.type}:${trackedNetworkState.validated}"
+            lastNetworkChangeAt = System.currentTimeMillis()
             cm.registerDefaultNetworkCallback(networkCallback)
             networkCallbackRegistered = true
-            val state = currentNetworkState()
-            lastNetworkSignature = "${state.type}:${state.validated}"
-            lastNetworkChangeAt = System.currentTimeMillis()
         }.onFailure {
             android.util.Log.w(TAG, "default network callback registration failed", it)
         }
@@ -681,6 +716,10 @@ class WebRtcCallManager(
         if (!networkCallbackRegistered) return
         runCatching { connectivityManager?.unregisterNetworkCallback(networkCallback) }
         networkCallbackRegistered = false
+        trackedDefaultNetwork = null
+        trackedNetworkState = NetworkState("unknown", false)
+        lastRecoveryWaitLog = ""
+        lastRecoveryWaitLogAt = 0L
     }
 
     fun end() {
