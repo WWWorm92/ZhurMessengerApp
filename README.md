@@ -1,8 +1,11 @@
 # Pulse Messenger for Android
 
+[Скачать APK](https://github.com/WWWorm92/ZhurMessengerApp/releases/latest) · [Сервер и веб-клиент](https://github.com/WWWorm92/ZhurMessenger) · [Сообщить о проблеме](https://github.com/WWWorm92/ZhurMessengerApp/issues)
+
+
 Android-клиент для [Pulse Messenger](https://github.com/WWWorm92/ZhurMessenger).
 
-Приложение работает как отдельный нативный клиент для мессенджера Zhuravlik. Оно работает с тем же backend, что и веб-версия, поддерживает сообщения в реальном времени, push-уведомления, локальное хранение данных и звонки через WebRTC.
+Приложение работает как отдельный нативный клиент для Pulse Messenger. Оно работает с тем же backend, что и веб-версия, поддерживает сообщения в реальном времени, push-уведомления, локальное хранение данных и звонки через WebRTC.
 
 ## Что работает
 
@@ -24,6 +27,14 @@ Android-клиент для [Pulse Messenger](https://github.com/WWWorm92/ZhurMe
 - аудио- и видеозвонки через WebRTC;
 - проверка и установка обновлений приложения;
 - светлая и тёмная темы.
+
+## Установка готового приложения
+
+1. Откройте [последний релиз](https://github.com/WWWorm92/ZhurMessengerApp/releases/latest).
+2. Скачайте `zhuravlik-release.apk` и подтвердите установку на Android.
+3. Используйте учётную запись на совместимом сервере Pulse Messenger.
+
+В старых выпусках и имени APK используется название **Zhuravlik**. Публичное название проекта — **Pulse Messenger**; имена файлов и репозиториев сохранены для совместимости ссылок и обновлений.
 
 ## Стек
 
